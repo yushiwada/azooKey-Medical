@@ -1,0 +1,12 @@
+ku-nlp/gpt2-small-japanese-char のトークナイザのデータ
+https://huggingface.co/ku-nlp/gpt2-small-japanese-char
+
+変換エンジン（AzooKeyKanaKanjiConverter の EfficientNGram）が、言語モデル（base_n5_lm）を使うための文字の表として同梱しています
+（アプリの Resources/AzooKeyKanaKanjiConverter_EfficientNGram.bundle/Contents/Resources/tokenizer）。
+同じ場所の README.md の表記: This tokenizer data is from ku-nlp/gpt2-small-japanese-char, following CC BY-SA 4.0 License.
+
+作成: ku-nlp（https://huggingface.co/ku-nlp ）
+ライセンス: Creative Commons Attribution-ShareAlike 4.0 International（CC BY-SA 4.0）
+  https://creativecommons.org/licenses/by-sa/4.0/legalcode （全文）
+  https://creativecommons.org/licenses/by-sa/4.0/deed.ja （概要）
+このデータは CC BY-SA 4.0 のもとで提供されており、無保証です（同ライセンスの第5条を参照）。

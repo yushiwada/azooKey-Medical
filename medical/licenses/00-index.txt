@@ -1,0 +1,36 @@
+azooKey Medical に含まれる第三者の著作物とライセンス（THIRD PARTY NOTICES）
+==========================================================================
+
+このファイルは medical/scripts/make_dist.sh が medical/licenses/*.txt をつなげて作ります。
+各ライセンスの全文は、このあとに「===== ファイル名 =====」の見出しを付けて続けます。
+版は 2026-10-24 にこのリポジトリのビルドで確かめたものです。
+
+アプリ（azooKeyMac.app）の中身
+--------------------------------
+| 名前 | 使い方（アプリの中の場所） | ライセンス | 入手元 | 全文 |
+|---|---|---|---|---|
+| azooKey-Desktop（azooKey Medical はこの派生版） | アプリ本体 | MIT（Copyright (c) 2025 Miwa Keita） | https://github.com/azooKey/azooKey-Desktop | 10 |
+| AzooKeyKanaKanjiConverter（04ce2ec） | 変換エンジン（実行ファイルの中） | MIT（Copyright (c) 2023 Miwa / Ensan） | https://github.com/azooKey/AzooKeyKanaKanjiConverter | 11 |
+| azooKey_dictionary_storage | 変換エンジンの辞書（Resources/AzooKeyKanaKanjiConverter_KanaKanjiConverterModuleWithDefaultDictionary.bundle/Contents/Resources/Dictionary） | Apache License 2.0（Copyright 2024 Miwa / ensan） | https://github.com/ensan-hcl/azooKey_dictionary_storage | 12 |
+| azooKey_emoji_dictionary_storage | 絵文字の辞書（同じ bundle の EmojiDictionary） | リポジトリにライセンスの表記なし。元データは mozc（BSD 3-Clause）と Unicode（Unicode License v3） | https://github.com/ensan-hcl/azooKey_emoji_dictionary_storage | 13 |
+| zenz-v3.2-small（gguf、Q5_K_M） | 変換AIのモデル（Resources/ggml-model-Q5_K_M.gguf） | Apache License 2.0（配布元の表記） | https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf | 20 |
+| ku-nlp/gpt2-small-japanese-char のトークナイザ | 言語モデルの文字の表（Resources/AzooKeyKanaKanjiConverter_EfficientNGram.bundle/Contents/Resources/tokenizer） | CC BY-SA 4.0 | https://huggingface.co/ku-nlp/gpt2-small-japanese-char | 21 |
+| base_n5_lm | 言語モデル（Resources/lm_*.marisa） | 入手元にライセンスの表記なし | https://huggingface.co/Miwa-Keita/base_n5_lm | 22 |
+| llama.cpp（xcframework、b4846） | 変換AIを動かす部品（Frameworks/llama.framework） | MIT | https://github.com/azooKey/llama.cpp | 30 |
+| swift-collections | 実行ファイルの中 | Apache License 2.0（Runtime Library Exception 付き） | https://github.com/apple/swift-collections | 40 |
+| swift-algorithms | 実行ファイルの中 | Apache License 2.0（Runtime Library Exception 付き） | https://github.com/apple/swift-algorithms | 41 |
+| swift-numerics | 実行ファイルの中 | Apache License 2.0（Runtime Library Exception 付き） | https://github.com/apple/swift-numerics | 42 |
+| swift-crypto | 実行ファイルの中（Resources/swift-crypto_Crypto.bundle） | Apache License 2.0（NOTICE あり） | https://github.com/apple/swift-crypto | 43・44 |
+| swift-asn1 | swift-crypto の依存として取得される。今のビルドでは実行ファイルに入っていない | Apache License 2.0（NOTICE あり） | https://github.com/apple/swift-asn1 | 45・46 |
+| ZIPFoundation | 実行ファイルの中（Resources/ZIPFoundation_ZIPFoundation.bundle） | MIT（Copyright (c) 2017-2025 Thomas Zoechling） | https://github.com/weichsel/ZIPFoundation | 47 |
+| SwiftyMarisa | 実行ファイルの中 | BSD 2-Clause と LGPL 2.1 以降の二重ライセンス（このアプリは BSD 2-Clause を選ぶ） | https://github.com/ensan-hcl/SwiftyMarisa | 48 |
+| marisa-trie（SwiftyMarisa に含まれる） | 実行ファイルの中 | BSD 2-Clause と LGPL 2.1 以降の二重ライセンス（このアプリは BSD 2-Clause を選ぶ） | https://github.com/s-yata/marisa-trie | 49 |
+| swift-tokenizers | 実行ファイルの中（Resources/swift-transformers_Hub.bundle） | Apache License 2.0（Copyright 2022 Hugging Face SAS） | https://github.com/ensan-hcl/swift-tokenizers | 50 |
+| Jinja | 実行ファイルの中 | MIT（Copyright (c) 2024 John Mai） | https://github.com/johnmai-dev/Jinja | 51 |
+| JMED-DICT mini（v1.1.2）の万病辞書・百薬辞書の部分 | 医療用語の辞書（Resources/medical_dictionary） | CC BY 4.0 | https://huggingface.co/datasets/sociocom/JMED-DICT_mini | 60・61 |
+| Swift の実行時ライブラリ | Frameworks/libswiftCompatibilitySpan.dylib | Apache License 2.0（Runtime Library Exception 付き） | https://github.com/swiftlang/swift | 70 |
+
+アプリに含めないもの
+--------------------
+- Ollama と LLM のモデル（Gemma 4 など）は、使う人がそれぞれ入れます。各配布元の条件に従ってください。
+- Apple Intelligence は macOS の機能です。

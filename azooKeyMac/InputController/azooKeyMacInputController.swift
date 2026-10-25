@@ -30,6 +30,12 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
 
     var promptInputWindow: PromptInputWindow
     var isPromptWindowVisible: Bool = false
+    /// 選んだ文を指示として実行する機能の状態（入力欄をまたいで1つ）
+    var selectionPrompt: SelectionPromptState { SelectionPromptState.shared }
+    /// 打った文章の記憶を入力欄ごとに分けるための印（この入力コントローラは入力欄ごとに作られる）
+    private let typedHistorySuffix = UUID().uuidString
+    /// この入力欄の記憶の名前（入力欄を離れたときに、アプリに問い合わせずに消すため）
+    private var lastTypedHistoryKey: String?
 
     // ダブルタップ検出用
     private var lastKey: (time: TimeInterval, code: UInt16) = (0, 0)
@@ -179,6 +185,11 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
 
     @MainActor
     override func deactivateServer(_ sender: Any!) {
+        // 入力欄を離れたら、その欄で打った文章の記憶を消す（別の文書の文章が文脈に混ざらないように）
+        if let key = self.lastTypedHistoryKey {
+            TypedHistory.shared.reset(app: key)
+        }
+        TypedHistory.shared.purgeExpired()
         self.segmentsManager.deactivate()
         self.candidatesWindow.orderOut(nil)
         self.predictionWindow.orderOut(nil)
@@ -200,7 +211,7 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
         }
         let text = self.segmentsManager.commitMarkedText(inputState: self.inputState)
         if let client = sender as? IMKTextInput {
-            client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            self.commitText(text, client: client)
         }
         self.inputState = .none
         self.refreshMarkedText()
@@ -260,10 +271,83 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
         guard let event, let client = sender as? IMKTextInput else {
             return false
         }
+        // azooKey Medical: 範囲選択してショートカット（既定は Option+Return）で、選んだ文をAIへの指示として実行する
+        if let handled = self.handleSelectionPromptKey(event, client: client) {
+            return handled
+        }
         guard event.type == .keyDown else {
             return false
         }
+        // 入力ソフトが使わずにアプリへ渡したキー（改行・削除・カーソル移動など）だけを、覚えた文章に反映する
+        let wasEmpty = self.segmentsManager.isEmpty
+        let handled = self.handleKeyDown(event, client: client)
+        if !handled, wasEmpty {
+            self.recordPassThroughKey(event, client: client)
+        }
+        return handled
+    }
 
+    /// 打った文章の記憶の名前（アプリと入力欄ごと）
+    func typedHistoryKey(client: IMKTextInput) -> String? {
+        guard let app = client.bundleIdentifier() else {
+            return nil
+        }
+        let key = "\(app)#\(self.typedHistorySuffix)"
+        self.lastTypedHistoryKey = key
+        return key
+    }
+
+    /// 文字列を確定してアプリに渡し、前の文章として覚える。
+    /// 英数モードで打った文字と、パスワードの欄など（安全な入力の状態）で打った文字は覚えない
+    @MainActor func commitText(_ text: String, client: IMKTextInput) {
+        client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        guard Config.UseTypedHistory().value, self.inputLanguage == .japanese, !IsSecureEventInputEnabled(),
+              let key = self.typedHistoryKey(client: client) else {
+            return
+        }
+        TypedHistory.shared.append(text, app: key)
+    }
+
+    /// 入力中でないときにアプリへそのまま渡ったキー（改行・削除・カーソル移動など）を、覚えた文章に反映する
+    @MainActor func recordPassThroughKey(_ event: NSEvent, client: IMKTextInput) {
+        guard Config.UseTypedHistory().value, let key = self.typedHistoryKey(client: client) else {
+            return
+        }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        // ⌘ や ⌃ を使う操作（取り消し・貼り付け・行頭へ移動など）は文章やカーソルを変えうるので、覚えた文章を忘れる
+        if !modifiers.isDisjoint(with: [.command, .control]) {
+            TypedHistory.shared.reset(app: key)
+            return
+        }
+        switch event.keyCode {
+        case 36, 76: // Return, Enter
+            if modifiers.isEmpty {
+                TypedHistory.shared.appendNewline(app: key)
+            } else {
+                TypedHistory.shared.reset(app: key)
+            }
+        case 51: // Delete
+            if modifiers.isEmpty {
+                TypedHistory.shared.deleteBackward(app: key)
+            } else {
+                TypedHistory.shared.reset(app: key)
+            }
+        case 123, 124, 125, 126: // 矢印
+            if modifiers == [.shift] {
+                // Shift と矢印で範囲を選んでいるとき。選んだ文の手前を探すのには使い、次に打ち始めるときに忘れる
+                TypedHistory.shared.markCursorUncertain(app: key)
+            } else {
+                TypedHistory.shared.reset(app: key)
+            }
+        case 115, 119, 116, 121, 117, 48: // Home・End・PageUp・PageDown・前方削除・Tab
+            TypedHistory.shared.reset(app: key)
+        default:
+            break
+        }
+    }
+
+    // swiftlint:disable:next cyclomatic_complexity
+    @MainActor func handleKeyDown(_ event: NSEvent, client: IMKTextInput) -> Bool {
         // カスタムプロンプトショートカットのチェック
         if let matchedPrompt = checkCustomPromptShortcut(event: event) {
             let aiBackendEnabled = Config.AIBackendPreference().value != .off
@@ -289,7 +373,7 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             inputState: inputState,
             typeBackSlash: Config.TypeBackSlash().value
            ) {
-            client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            self.commitText(text, client: client)
             return true
         }
 
@@ -361,7 +445,8 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             inputLanguage: self.inputLanguage,
             liveConversionEnabled: Config.LiveConversion().value,
             enableDebugWindow: Config.DebugWindow().value,
-            enableSuggestion: aiBackendEnabled
+            // azooKey Medical: Ctrl+S で候補を出す機能は、設定で ON にしたときだけ（既定は元の azooKey と同じく Ctrl+S をアプリに渡す）
+            enableSuggestion: aiBackendEnabled && Config.ControlSSuggestion().value
         )
         return handleClientAction(clientAction, clientActionCallback: clientActionCallback, client: client)
     }
@@ -409,21 +494,21 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             let inputStyle: InputStyle = self.inputLanguage == .english ? .direct : self.inputStyle
             self.segmentsManager.insertAtCursorPosition(pieces: pieces, inputStyle: inputStyle)
         case .insertWithoutMarkedText(let string):
-            client.insertText(string, replacementRange: NSRange(location: NSNotFound, length: 0))
+            self.commitText(string, client: client)
         case .editSegment(let count):
             self.segmentsManager.editSegment(count: count)
         case .commitMarkedText:
             let text = self.segmentsManager.commitMarkedText(inputState: self.inputState)
-            client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            self.commitText(text, client: client)
         case .commitMarkedTextAndAppendToMarkedText(let string):
             let text = self.segmentsManager.commitMarkedText(inputState: self.inputState)
-            client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            self.commitText(text, client: client)
             // 英語モードの場合は.directでローマ字変換せずそのまま入力
             let inputStyle: InputStyle = self.inputLanguage == .english ? .direct : self.inputStyle
             self.segmentsManager.insertAtCursorPosition(string, inputStyle: inputStyle)
         case .commitMarkedTextAndAppendPieceToMarkedText(let pieces):
             let text = self.segmentsManager.commitMarkedText(inputState: self.inputState)
-            client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            self.commitText(text, client: client)
             // 英語モードの場合は.directでローマ字変換せずそのまま入力
             let inputStyle: InputStyle = self.inputLanguage == .english ? .direct : self.inputStyle
             self.segmentsManager.insertAtCursorPosition(pieces: pieces, inputStyle: inputStyle)
@@ -472,7 +557,7 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             self.switchInputLanguage(language, client: client)
         case .commitMarkedTextAndSelectInputLanguage(let language):
             let text = self.segmentsManager.commitMarkedText(inputState: self.inputState)
-            client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            self.commitText(text, client: client)
             self.switchInputLanguage(language, client: client)
         // PredictiveSuggestion
         case .requestPredictiveSuggestion:
@@ -513,7 +598,7 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
         case .submitUnicodeInput(let codePoint):
             if let scalar = UInt32(codePoint, radix: 16), let unicodeScalar = Unicode.Scalar(scalar) {
                 let character = String(Character(unicodeScalar))
-                client.insertText(character, replacementRange: NSRange(location: NSNotFound, length: 0))
+                self.commitText(character, client: client)
             }
         case .cancelUnicodeInput:
             // 状態遷移は clientActionCallback で行われるので、ここでは何もしない
@@ -524,7 +609,7 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
             // 残りのテキストがあればひらがなのまま確定
             if !self.segmentsManager.isEmpty {
                 let text = self.segmentsManager.convertTarget
-                client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+                self.commitText(text, client: client)
                 self.segmentsManager.stopComposition()
             }
         // MARK: 特殊ケース
@@ -562,10 +647,10 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
         client.overrideKeyboard(withKeyboardNamed: Config.KeyboardLayout().value.layoutIdentifier)
         switch language {
         case .english:
-            client.selectMode("dev.ensan.inputmethod.azooKeyMac.Roman")
+            client.selectMode("\(Bundle.main.bundleIdentifier ?? "").Roman")
             self.segmentsManager.stopJapaneseInput()
         case .japanese:
-            client.selectMode("dev.ensan.inputmethod.azooKeyMac.Japanese")
+            client.selectMode("\(Bundle.main.bundleIdentifier ?? "").Japanese")
         }
     }
 
@@ -795,7 +880,7 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
         if let client = self.client() {
             // インサートを行う前にコンテキストを取得する
             let cleanLeftSideContext = self.segmentsManager.getCleanLeftSideContext(maxCount: 30)
-            client.insertText(candidate.text, replacementRange: NSRange(location: NSNotFound, length: 0))
+            self.commitText(candidate.text, client: client)
             // アプリケーションサポートのディレクトリを準備しておく
             self.segmentsManager.prefixCandidateCommited(candidate, leftSideContext: cleanLeftSideContext ?? "")
         }
@@ -832,7 +917,53 @@ extension azooKeyMacInputController: SegmentManagerDelegate {
         // 同じ行の文字のみコンテキストに含める
         let leftSideContext = self.client().string(from: leftRange, actualRange: &actual)
         self.segmentsManager.appendDebugMessage("\(#function): leftSideContext=\(leftSideContext ?? "nil")")
-        return leftSideContext
+        // azooKey Medical: アプリが前の文章を返さない（Notion や Chrome など）ときは、IME が覚えている確定済みの文章で補う
+        guard Config.UseTypedHistory().value, let client = self.client(), let key = self.typedHistoryKey(client: client) else {
+            return leftSideContext
+        }
+        let location: Int? = endIndex == NSNotFound ? nil : endIndex
+        TypedHistory.shared.checkCursor(app: key, location: location)
+        TypedHistory.shared.noteCompositionStart(app: key, location: location)
+        return TypedHistory.merge(fromClient: leftSideContext, history: TypedHistory.shared.text(app: key), maxCount: maxCount)
+    }
+
+    func getRightSideContext(maxCount: Int) -> String? {
+        let marked = client().markedRange()
+        let selected = client().selectedRange()
+        let base = marked.location != NSNotFound ? marked : selected
+        guard base.location != NSNotFound else {
+            return nil
+        }
+        let start = base.location + base.length
+        let length = min(maxCount, max(client().length() - start, 0))
+        guard length > 0 else {
+            return nil
+        }
+        var actual = NSRange(location: NSNotFound, length: 0)
+        let text = self.client().string(from: NSRange(location: start, length: length), actualRange: &actual)
+        // 頼んだ場所と違う所の文字が返ってきたら使わない（Chromium 系は手元に持っている部分だけを返すことがある）
+        if actual.location != NSNotFound, actual.location != start {
+            return nil
+        }
+        return text
+    }
+
+    func getDocumentHead(maxCount: Int) -> String? {
+        var length = min(maxCount, client().length())
+        // 打ちかけの文字（変換前の文字）は、文書のタイトルとして使わない
+        let marked = client().markedRange()
+        if marked.location != NSNotFound {
+            length = min(length, marked.location)
+        }
+        guard length > 0 else {
+            return nil
+        }
+        var actual = NSRange(location: NSNotFound, length: 0)
+        let text = self.client().string(from: NSRange(location: 0, length: length), actualRange: &actual)
+        if actual.location != NSNotFound, actual.location != 0 {
+            return nil
+        }
+        return text
     }
 }
 
@@ -846,7 +977,7 @@ extension azooKeyMacInputController: ReplaceSuggestionsViewControllerDelegate {
             if let candidate = self.replaceSuggestionsViewController.getSelectedCandidate() {
                 if let client = self.client() {
                     // 選択された候補をテキストとして挿入
-                    client.insertText(candidate.text, replacementRange: NSRange(location: NSNotFound, length: 0))
+                    self.commitText(candidate.text, client: client)
                     // サジェスト候補ウィンドウを非表示にする
                     self.replaceSuggestionWindow.setIsVisible(false)
                     self.replaceSuggestionWindow.orderOut(nil)
@@ -953,14 +1084,9 @@ extension azooKeyMacInputController {
                 let errorMessage = "APIリクエストエラー: \(error.localizedDescription)"
                 self.segmentsManager.appendDebugMessage(errorMessage)
 
-                // ユーザーに通知
+                // ユーザーに通知する。azooKey Medical: 入力ソフトの中で警告の窓（runModal）を出すと、閉じるまで入力が止まるので、小さな表示にする
                 await MainActor.run {
-                    let alert = NSAlert()
-                    alert.messageText = "変換に失敗しました"
-                    alert.informativeText = error.localizedDescription
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "OK")
-                    alert.runModal()
+                    SelectionPromptState.shared.statusPanel.show("AIの候補を出せませんでした: \(error.localizedDescription)", near: .zero, autoHideAfter: 5)
                 }
             }
         }
@@ -976,7 +1102,7 @@ extension azooKeyMacInputController {
     @MainActor func submitSelectedSuggestionCandidate() {
         if let candidate = self.replaceSuggestionsViewController.getSelectedCandidate() {
             if let client = self.client() {
-                client.insertText(candidate.text, replacementRange: NSRange(location: NSNotFound, length: 0))
+                self.commitText(candidate.text, client: client)
                 self.replaceSuggestionWindow.setIsVisible(false)
                 self.replaceSuggestionWindow.orderOut(nil)
                 self.segmentsManager.stopComposition()

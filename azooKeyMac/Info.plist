@@ -2,6 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>LSUIElement</key>
 	<true/>
 	<key>ComponentInputModeDict</key>
@@ -16,7 +21,7 @@
 			<key>com.apple.inputmethod.Roman</key>
 			<dict>
 				<key>TISInputSourceID</key>
-				<string>dev.ensan.inputmethod.azooKeyMac.Roman</string>
+				<string>$(PRODUCT_BUNDLE_IDENTIFIER).Roman</string>
 				<key>tsInputModePrimaryInScriptKey</key>
 				<false/>
 				<key>tsInputModeScriptKey</key>
@@ -51,7 +56,7 @@
 				<key>tsInputModeKeyEquivalentKey</key>
 				<string>J</string>
 				<key>TISInputSourceID</key>
-				<string>dev.ensan.inputmethod.azooKeyMac.Japanese</string>
+				<string>$(PRODUCT_BUNDLE_IDENTIFIER).Japanese</string>
 				<key>tsInputModePrimaryInScriptKey</key>
 				<true/>
 				<key>tsInputModeScriptKey</key>
@@ -79,6 +84,10 @@
 	</dict>
 	<key>TISIntendedLanguage</key>
 	<string>ja</string>
+	<key>TICapsLockLanguageSwitchCapable</key>
+	<true/>
+	<key>TISCapsLockIsSwitchToRomanMode</key>
+	<true/>
 	<key>NSPrincipalClass</key>
 	<string>$(PRODUCT_MODULE_NAME).NSManualApplication</string>
 	<key>InputMethodConnectionName</key>

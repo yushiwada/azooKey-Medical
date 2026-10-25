@@ -28,7 +28,8 @@ class NSManualApplication: NSApplication {
 
 @main
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var server = IMKServer()
+    /// 入力ソフトのサーバー。起動時に1つだけ作る（元の azooKey の修正 #390 と同じ。2つ作ると、新しい Chromium 系のアプリで文字が入らない）
+    var server: IMKServer?
     weak var configWindow: NSWindow?
     weak var userDictionaryEditorWindow: NSWindow?
     var configWindowController: NSWindowController?
@@ -85,10 +86,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         self.server = IMKServer(name: Bundle.main.infoDictionary?["InputMethodConnectionName"] as? String, bundleIdentifier: Bundle.main.bundleIdentifier)
         NSLog("tried connection")
 
-        // Keychainから設定値を非同期で読み込み
-        Task {
-            await Config.OpenAiApiKey.loadFromKeychain()
-        }
+        // azooKey Medical: API キーは使わない（この Mac の中のサーバーにだけ送る）ので、キーチェーンからは読まない
 
         // Check if mainMenu exists, or create it
         if NSApp.mainMenu == nil {

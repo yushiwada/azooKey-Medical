@@ -1,0 +1,6 @@
+base_n5_lm（言語モデル）
+https://huggingface.co/Miwa-Keita/base_n5_lm （コミット 160a305、2025-02-08）
+
+アプリの Resources/lm_c_abc.marisa・lm_r_xbx.marisa・lm_u_abx.marisa・lm_u_xbc.marisa として、変更せずに同梱しています。
+入手元のリポジトリには README もライセンスの表記もありません（2026-10-24 に確認）。
+元の azooKey-Desktop も同じファイルを同じ方法で取得し、アプリに同梱しています。

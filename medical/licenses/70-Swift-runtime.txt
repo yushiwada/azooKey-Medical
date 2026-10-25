@@ -1,0 +1,6 @@
+Swift の実行時ライブラリ（Frameworks/libswiftCompatibilitySpan.dylib）
+https://github.com/swiftlang/swift
+
+Xcode がアプリをビルドするときに同梱する Swift の実行時ライブラリです。
+Apache License 2.0 with Runtime Library Exception（全文は 40 の swift-collections の LICENSE.txt と同じ文面）。
+Runtime Library Exception により、この部分の帰属表示は求められていませんが、参考として記します。

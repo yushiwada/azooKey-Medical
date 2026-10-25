@@ -44,6 +44,55 @@ extension Config {
         static let `default` = true
         public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.enableLiveConversion"
     }
+    /// 前の行も変換の文脈に含める設定（azooKey Medical で追加）
+    public struct MultiLineLeftContext: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.multiLineLeftContext"
+    }
+    /// アプリに同梱した医療用語の辞書を使う設定（azooKey Medical で追加）
+    public struct MedicalDictionary: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.medicalDictionary"
+    }
+    /// 前の文章が医療の内容なら医療用語の辞書を強く効かせる設定（azooKey Medical で追加・実験的）
+    public struct MedicalContextBoost: BoolConfigItem {
+        public init() {}
+        static let `default` = false
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.medicalContextBoost"
+    }
+    /// IME で確定した文章を覚えて、アプリが前の文章を返さないときの文脈に使う設定（azooKey Medical で追加。メモリのみ）
+    public struct UseTypedHistory: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.useTypedHistory"
+    }
+    /// ノートのタイトルを話題として変換AIに渡す設定（azooKey Medical で追加・実験的）
+    public struct UseDocumentTitle: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.useDocumentTitle"
+    }
+    /// カーソルの後ろの文章を話題として変換AIに渡す設定（azooKey Medical で追加・実験的）
+    public struct UseRightSideContext: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.useRightSideContext"
+    }
+    /// 範囲を選んでショートカット（既定は Option+Return）を押すと、選んだ文をAIへの指示として実行する（azooKey Medical で追加）
+    public struct SelectionPromptEnabled: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.selectionPromptEnabled"
+    }
+    /// Ctrl+S で、続きの文や言い換えの候補を AI に出させる（元の azooKey の機能）。
+    /// azooKey Medical は AI を最初から使うので、元の azooKey と同じ動き（Ctrl+S をアプリに渡す）になるよう、この機能だけ既定で OFF にする
+    public struct ControlSSuggestion: BoolConfigItem {
+        public init() {}
+        static let `default` = false
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.controlSSuggestion"
+    }
     /// 円マークの代わりにバックスラッシュを入力する設定
     public struct TypeBackSlash: BoolConfigItem {
         public init() {}

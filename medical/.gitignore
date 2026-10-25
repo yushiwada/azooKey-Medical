@@ -1,0 +1,12 @@
+# 作るたびに取得・生成するもの（公開しない）
+build
+dist
+dictionaries/sources
+dictionaries/build
+harness/.build/
+eval/runs*/
+# 自分用の語（公開しない）
+dictionaries/personal
+
+# Python が作るキャッシュ
+__pycache__/

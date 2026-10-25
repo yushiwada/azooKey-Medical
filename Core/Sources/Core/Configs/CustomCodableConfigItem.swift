@@ -222,8 +222,12 @@ extension Config {
                legacyValue {
                 return .openAI
             }
-            return .off
+            // azooKey Medical: Apple Intelligence が使える Mac では Apple Intelligence を既定にする。
+            // 使えない Mac では元の azooKey と同じく OFF（ON のままだと、AI を使う機能を呼ぶたびに失敗する）
+            return Self.foundationModelsAvailable ? .foundationModels : .off
         }
+        /// Apple Intelligence が使えるか。キーを押すたびに調べないよう、起動中は最初に調べた結果を使う
+        private static let foundationModelsAvailable: Bool = FoundationModelsClientCompat.checkAvailability().isAvailable
         public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.aiBackend"
     }
 }

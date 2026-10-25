@@ -85,6 +85,11 @@ public enum DebugTypoCorrectionWeights {
     }
 
     public static func downloadWeights(modelDirectoryURL: URL) async throws {
+        // azooKey Medical: 打った文章を外に出さない方針に合わせ、外部からのダウンロードも行わない
+        throw LocalOnlyError.externalDownloadDisabled
+    }
+
+    private static func downloadWeightsFromRemote(modelDirectoryURL: URL) async throws {
         let fileManager = FileManager.default
         let parentDirectoryURL = modelDirectoryURL.deletingLastPathComponent()
         try fileManager.createDirectory(at: parentDirectoryURL, withIntermediateDirectories: true)

@@ -1,0 +1,70 @@
+diff --git a/Sources/CliTool/Subcommands/EvaluateCommand.swift b/Sources/CliTool/Subcommands/EvaluateCommand.swift
+index 9e3a462..3651e6d 100644
+--- a/Sources/CliTool/Subcommands/EvaluateCommand.swift
++++ b/Sources/CliTool/Subcommands/EvaluateCommand.swift
+@@ -47,7 +47,8 @@ extension Subcommands {
+                     leftSideContext: item.left_context,
+                     rightSideContext: item.right_context,
+                     ignoreLeftContext: self.configZenzaiIgnoreLeftContext,
+-                    ignoreRightContext: self.configZenzaiIgnoreRightContext
++                    ignoreRightContext: self.configZenzaiIgnoreRightContext,
++                    topic: item.topic
+                 )
+                 let result = converter.requestCandidates(composingText, options: requestOptions)
+                 let mainResults = result.mainResults.filter {
+@@ -108,6 +109,9 @@ extension Subcommands {
+         /// 右文脈
+         var right_context: String?
+ 
++        /// 話題（azooKey Medical で追加。指定するとこの問題だけ --config_topic の代わりに使う）
++        var topic: String?
++
+         /// ユーザ辞書
+         var user_dictionary: [InputUserDictionaryItem]?
+     }
+diff --git a/Sources/CliTool/Subcommands/SharedConversionOptions.swift b/Sources/CliTool/Subcommands/SharedConversionOptions.swift
+index 69fc090..2bd8e1e 100644
+--- a/Sources/CliTool/Subcommands/SharedConversionOptions.swift
++++ b/Sources/CliTool/Subcommands/SharedConversionOptions.swift
+@@ -27,6 +27,8 @@ struct SharedConversionOptions: ParsableArguments {
+     var roman2kana = false
+     @Option(name: [.customLong("config_user_dictionary")], help: "User Dictionary JSON file path")
+     var configUserDictionary: String?
++    @Option(name: [.customLong("config_user_dictionary_dir")], help: "Directory that contains a compiled user dictionary (user.louds etc.)")
++    var configUserDictionaryDir: String?
+     @Option(name: [.customLong("config_zenzai_inference_limit")], help: "inference limit for zenzai.")
+     var configZenzaiInferenceLimit: Int = .max
+     @Flag(name: [.customLong("config_zenzai_rich_n_best")], help: "enable rich n_best generation for zenzai.")
+@@ -100,7 +102,7 @@ struct SharedConversionOptions: ParsableArguments {
+             memoryDirectoryURL: self.writableMemoryPath.map(URL.init(fileURLWithPath:))
+                 ?? self.readOnlyMemoryPath.map(URL.init(fileURLWithPath:))
+                 ?? (learningType == .nothing ? URL(fileURLWithPath: "") : FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)),
+-            sharedContainerURL: URL(fileURLWithPath: ""),
++            sharedContainerURL: URL(fileURLWithPath: self.configUserDictionaryDir ?? ""),
+             textReplacer: .withDefaultEmojiDictionary(),
+             specialCandidateProviders: KanaKanjiConverter.defaultSpecialCandidateProviders,
+             zenzaiMode: try self.makeZenzaiMode(versionDependentMode: self.makeDefaultVersionDependentMode()),
+@@ -120,7 +122,7 @@ struct SharedConversionOptions: ParsableArguments {
+         return options
+     }
+ 
+-    func makeEvaluateRequestOptions(leftSideContext: String?, rightSideContext: String?, ignoreLeftContext: Bool, ignoreRightContext: Bool) throws -> ConvertRequestOptions {
++    func makeEvaluateRequestOptions(leftSideContext: String?, rightSideContext: String?, ignoreLeftContext: Bool, ignoreRightContext: Bool, topic: String? = nil) throws -> ConvertRequestOptions {
+         var options = ConvertRequestOptions(
+             N_best: self.configNBest,
+             requireJapanesePrediction: .disabled,
+@@ -133,11 +135,13 @@ struct SharedConversionOptions: ParsableArguments {
+             maxMemoryCount: 0,
+             shouldResetMemory: false,
+             memoryDirectoryURL: URL(fileURLWithPath: ""),
+-            sharedContainerURL: URL(fileURLWithPath: ""),
++            sharedContainerURL: URL(fileURLWithPath: self.configUserDictionaryDir ?? ""),
+             textReplacer: .withDefaultEmojiDictionary(),
+             specialCandidateProviders: KanaKanjiConverter.defaultSpecialCandidateProviders,
+             zenzaiMode: try self.makeZenzaiMode(
+                 versionDependentMode: .v3(.init(
++                    profile: self.configZenzaiProfile,
++                    topic: topic ?? self.configZenzaiTopic,
+                     leftSideContext: ignoreLeftContext ? nil : leftSideContext,
+                     rightSideContext: ignoreRightContext ? nil : rightSideContext,
+                     enableAlignmentSeparator: self.configZenzaiAlignmentSeparator

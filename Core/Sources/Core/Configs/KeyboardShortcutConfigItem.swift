@@ -16,6 +16,19 @@ public struct KeyboardShortcut: Codable, Equatable, Hashable, Sendable {
         modifiers: .control
     )
 
+    /// 選んだ文を AI への指示として実行するショートカットの初期値（Option+Return。azooKey Medical で追加）
+    public static let defaultSelectionPromptShortcut = KeyboardShortcut(
+        key: "\r",
+        modifiers: .option
+    )
+
+    /// macOS 15 以降、OS が「コンテキストメニューを表示」に使うキー（Control+Return）。
+    /// OS が IME より先に受け取るので、IME のショートカットには使えない
+    public static let systemContextMenuShortcut = KeyboardShortcut(
+        key: "\r",
+        modifiers: .control
+    )
+
     /// 表示用の文字列（例: "⌃S"）
     public var displayString: String {
         var result = ""
@@ -33,7 +46,16 @@ public struct KeyboardShortcut: Codable, Equatable, Hashable, Sendable {
             result += "⌘"
         }
 
-        result += key.uppercased()
+        switch key {
+        case "\r":
+            result += "⏎"
+        case " ":
+            result += "Space"
+        case "\t":
+            result += "⇥"
+        default:
+            result += key.uppercased()
+        }
         return result
     }
 }
@@ -73,5 +95,13 @@ extension Config {
 
         public static let `default`: KeyboardShortcut = .defaultTransformShortcut
         public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.transform_shortcut"
+    }
+
+    /// 選んだ文を AI への指示として実行するキーボードショートカット（azooKey Medical で追加）
+    public struct SelectionPromptShortcut: KeyboardShortcutConfigItem {
+        public init() {}
+
+        public static let `default`: KeyboardShortcut = .defaultSelectionPromptShortcut
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.selection_prompt_shortcut"
     }
 }

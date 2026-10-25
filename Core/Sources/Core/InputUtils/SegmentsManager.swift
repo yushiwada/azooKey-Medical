@@ -25,6 +25,8 @@ public final class SegmentsManager {
     }
 
     public weak var delegate: (any SegmentManagerDelegate)?
+    /// 話題（タイトル）と後ろの文章を、打つたびにアプリへ問い合わせないよう1秒間覚えておく
+    private var contextCache: (topic: String?, right: String?, time: Date)?
     private var kanaKanjiConverter: KanaKanjiConverter
     private let applicationDirectoryURL: URL
     private let containerURL: URL?
@@ -92,31 +94,9 @@ public final class SegmentsManager {
 
     private lazy var zenzaiPersonalizationMode: ConvertRequestOptions.ZenzaiMode.PersonalizationMode? = self.getZenzaiPersonalizationMode()
 
+    /// azooKey Medical: 個人に合わせた言語モデル（別アプリ Tuner が作るもの）は、Tuner との連携（App Group）を外したので使わない
     private func getZenzaiPersonalizationMode() -> ConvertRequestOptions.ZenzaiMode.PersonalizationMode? {
-        let alpha = self.zenzaiPersonalizationLevel.alpha
-        // オフなので。
-        if alpha == 0 {
-            return nil
-        }
-        guard let containerURL else {
-            self.appendDebugMessage("❌ Failed to get container URL.")
-            return nil
-        }
-
-        let base = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/", isDirectory: false).path + "/lm"
-        let personal = containerURL.appendingPathComponent("Library/Application Support/p13n_v1").path + "/lm"
-        // check personal lm existence
-        guard [
-            FileManager.default.fileExists(atPath: personal + "_c_abc.marisa"),
-            FileManager.default.fileExists(atPath: personal + "_r_xbx.marisa"),
-            FileManager.default.fileExists(atPath: personal + "_u_abx.marisa"),
-            FileManager.default.fileExists(atPath: personal + "_u_xbc.marisa")
-        ].allSatisfy(\.self) else {
-            self.appendDebugMessage("❌ Seems like there is missing marisa file for prefix \(personal)")
-            return nil
-        }
-
-        return .init(baseNgramLanguageModel: base, personalNgramLanguageModel: personal, alpha: alpha)
+        nil
     }
 
     private enum Operation: Sendable {
@@ -127,6 +107,10 @@ public final class SegmentsManager {
     }
 
     public func appendDebugMessage(_ string: String) {
+        // azooKey Medical: デバッグ用の表示を ON にしていないときは集めない（打った文章や選んだ文章がメモリに残らないように）
+        guard Config.DebugWindow().value else {
+            return
+        }
         self.debugCandidates.insert(
             Candidate(
                 text: string.replacingOccurrences(of: "\n", with: "\\n"),
@@ -151,13 +135,95 @@ public final class SegmentsManager {
             inferenceLimit: Config.ZenzaiInferenceLimit().value,
             requestRichCandidates: requestRichCandidates,
             personalizationMode: self.zenzaiPersonalizationMode,
-            versionDependentMode: .v3(
-                .init(
-                    profile: Config.ZenzaiProfile().value,
-                    leftSideContext: leftSideContext
+            versionDependentMode: {
+                let context = self.currentTopicAndRightContext(leftSideContext: leftSideContext)
+                return .v3(
+                    .init(
+                        profile: Config.ZenzaiProfile().value,
+                        topic: context.topic,
+                        leftSideContext: leftSideContext,
+                        rightSideContext: context.right
+                    )
                 )
-            )
+            }()
         )
+    }
+
+    // MARK: - ノートのタイトルを「話題」として、カーソルの後ろの文章を「後ろの文脈」として変換AIに渡す（azooKey Medical で追加）
+
+    /// 変換AIに渡す話題（ノートのタイトル）と後ろの文章。
+    /// 後ろの文章は、変換モデル zenz-v3.2 が後ろの文脈として受け取る（変換エンジン 2026-05-10 以降の版で使える）。
+    /// 打つたびにアプリへ問い合わせないよう、1秒間は前の結果を使い回す
+    private func currentTopicAndRightContext(leftSideContext: String?) -> (topic: String?, right: String?) {
+        let now = Date()
+        if let cached = self.contextCache, now.timeIntervalSince(cached.time) < 1.0 {
+            return (cached.topic, cached.right)
+        }
+        var topic: String?
+        if Config.UseDocumentTitle().value,
+           let title = Self.documentTitle(head: self.delegate?.getDocumentHead(maxCount: 300), leftSideContext: leftSideContext) {
+            topic = String(title.prefix(20))
+        }
+        var right: String?
+        if Config.UseRightSideContext().value {
+            right = Self.cleanRightSideContext(self.delegate?.getRightSideContext(maxCount: 20))
+        }
+        self.contextCache = (topic, right, now)
+        return (topic, right)
+    }
+
+    /// 文書の先頭からタイトルを取り出す。YAML の front matter は飛ばし、最初の見出し（なければ最初の空でない行）を使う。
+    /// 日付や「メモ」のような中身のないタイトル、いま打っている行そのものは使わない
+    static func documentTitle(head: String?, leftSideContext: String?) -> String? {
+        guard let head, !head.isEmpty else {
+            return nil
+        }
+        // CRLF や CR の改行でも分ける（"\r\n" は1文字として扱われるので、文字が改行かどうかで分ける）
+        var lines = head.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+        if lines.first == "---", let end = lines.dropFirst().firstIndex(of: "---") {
+            lines = Array(lines[(end + 1)...])
+        }
+        // タイトルは最初の空でない行（見出しの # は外す）。後ろの行の # はハッシュタグのことがあるので使わない
+        guard let line = lines.first(where: { !$0.isEmpty }) else {
+            return nil
+        }
+        let title = Self.strippingHeadingMarks(line)
+        // いま打っている行がタイトルの行なら使わない（打ちかけの文字そのものを話題にしない）
+        if let leftSideContext, !leftSideContext.contains(where: \.isNewline) {
+            let current = Self.strippingHeadingMarks(leftSideContext.trimmingCharacters(in: .whitespaces))
+            if !current.isEmpty, title.hasPrefix(current) || current.hasPrefix(title) {
+                return nil
+            }
+        }
+        return Self.isInformative(title) ? title : nil
+    }
+
+    /// 見出しの記号（行の頭の # と空白）を外す
+    static func strippingHeadingMarks(_ line: String) -> String {
+        String(line.drop(while: { $0 == "#" || $0 == " " || $0 == "\u{3000}" }))
+    }
+
+    /// カーソルの後ろの文章を、同じ行のぶんだけ取り出す（空なら nil）
+    static func cleanRightSideContext(_ text: String?) -> String? {
+        guard let text else {
+            return nil
+        }
+        let line = (text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).first.map(String.init) ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        return line.isEmpty ? nil : line
+    }
+
+    private static let genericTitles: Set<String> = ["メモ", "ノート", "日記", "無題", "Untitled", "TODO", "Todo", "todo", "下書き", "ログ"]
+
+    /// 話題として意味のある文字列か（日付・数字だけ・短すぎる・決まり文句は除く）
+    static func isInformative(_ text: String) -> Bool {
+        let meaningful = text.filter { $0.isLetter && !$0.isASCII }
+        guard meaningful.count >= 2, !genericTitles.contains(text) else {
+            return false
+        }
+        // 「2026年10月24日」のような日付も除く
+        let dateLike = text.allSatisfy { $0.isNumber || "-/.:年月日（）() 曜火水木金土月".contains($0) }
+        return !dateLike
     }
 
     private var metadata: ConvertRequestOptions.Metadata {
@@ -185,7 +251,7 @@ public final class SegmentsManager {
             fullWidthRomanCandidate: true,
             learningType: Config.Learning().value.learningType,
             memoryDirectoryURL: self.azooKeyMemoryDir,
-            sharedContainerURL: self.azooKeyMemoryDir,
+            sharedContainerURL: self.userDictionaryDirectory(leftSideContext: leftSideContext),
             textReplacer: .withDefaultEmojiDictionary(),
             specialCandidateProviders: KanaKanjiConverter.defaultSpecialCandidateProviders,
             zenzaiMode: self.zenzaiMode(leftSideContext: leftSideContext, requestRichCandidates: requestRichCandidates),
@@ -193,6 +259,54 @@ public final class SegmentsManager {
             typoCorrectionMode: .automatic,
             metadata: self.metadata
         )
+    }
+
+    private static let medicalDictionaryRoot = Bundle.main.bundleURL
+        .appendingPathComponent("Contents/Resources/medical_dictionary", isDirectory: true)
+
+    /// 医療の文脈かを判定する語の一覧（同梱の markers.txt。1行1語）
+    private static let medicalMarkers: Set<String> = {
+        let url = medicalDictionaryRoot.appendingPathComponent("markers.txt")
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            return []
+        }
+        return Set(text.split(separator: "\n").map { String($0) }.filter { $0.count >= 2 })
+    }()
+    private static let medicalMarkerMaxLength = medicalMarkers.map(\.count).max() ?? 0
+
+    /// 前の文章に医療の語が含まれていれば医療の文脈とみなす
+    static func isMedicalContext(_ context: String?) -> Bool {
+        guard let context, !context.isEmpty, medicalMarkerMaxLength >= 2 else {
+            return false
+        }
+        let chars = Array(context)
+        for start in chars.indices {
+            let maxLength = min(medicalMarkerMaxLength, chars.count - start)
+            guard maxLength >= 2 else { break }
+            for length in 2...maxLength where medicalMarkers.contains(String(chars[start..<(start + length)])) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 変換エンジンがコンパイル済みの user 辞書（user.louds など）を探す場所。
+    /// 医療用語の辞書は、もとの辞書では候補にも出ない語だけを弱く効かせた版（weak）を使い、
+    /// 同音の語のどれにするかは前の文章を見て変換AIが決める。
+    /// 実験的な設定が ON で前の文章が医療の内容なら、強く効かせる版（strong）を使う（評価では差し引きの得がなかったので既定は OFF）。
+    /// 元の azooKey は学習データと同じ場所を渡している
+    private func userDictionaryDirectory(leftSideContext: String?) -> URL {
+        guard Config.MedicalDictionary().value else {
+            return self.azooKeyMemoryDir
+        }
+        let useStrong = Config.MedicalContextBoost().value && Self.isMedicalContext(leftSideContext)
+        for name in useStrong ? ["strong", "weak"] : ["weak"] {
+            let directory = Self.medicalDictionaryRoot.appendingPathComponent(name, isDirectory: true)
+            if FileManager.default.fileExists(atPath: directory.appendingPathComponent("user.louds").path) {
+                return directory
+            }
+        }
+        return self.azooKeyMemoryDir
     }
 
     private func hasDebugTypoCorrectionWeights() -> Bool {
@@ -211,6 +325,7 @@ public final class SegmentsManager {
 
     @MainActor
     public func activate() {
+        self.contextCache = nil
         self.shouldShowCandidateWindow = false
         self.backspaceAdjustedPredictionCandidate = nil
         self.backspaceTypoCorrectionLock = nil
@@ -237,6 +352,7 @@ public final class SegmentsManager {
     @MainActor
     /// この入力を打ち切る
     public func stopComposition() {
+        self.contextCache = nil
         self.composingText.stopComposition()
         self.kanaKanjiConverter.stopComposition()
         self.rawCandidates = nil
@@ -446,7 +562,15 @@ public final class SegmentsManager {
     }
 
     public func getCleanLeftSideContext(maxCount: Int) -> String? {
-        self.delegate?.getLeftSideContext(maxCount: 30).map {
+        if Config.MultiLineLeftContext().value {
+            // 前の行も含める（箇条書きのメモで文脈が前の行にある場合に効く）。各行の先頭の空白は除く
+            return self.delegate?.getLeftSideContext(maxCount: 40).map {
+                $0.split(separator: "\n", omittingEmptySubsequences: false)
+                    .map { String($0.drop(while: \.isWhitespace)) }
+                    .joined(separator: "\n")
+            }
+        }
+        return self.delegate?.getLeftSideContext(maxCount: 30).map {
             var last = $0.split(separator: "\n", omittingEmptySubsequences: false).last ?? $0[...]
             // 前方の空白を削除する
             while last.first?.isWhitespace ?? false {
@@ -1073,6 +1197,15 @@ public final class SegmentsManager {
 
 public protocol SegmentManagerDelegate: AnyObject {
     func getLeftSideContext(maxCount: Int) -> String?
+    /// カーソル（入力中の文字列）より後ろの文章（azooKey Medical で追加）
+    func getRightSideContext(maxCount: Int) -> String?
+    /// 文書の先頭の文章（タイトルを取り出すのに使う。azooKey Medical で追加）
+    func getDocumentHead(maxCount: Int) -> String?
+}
+
+public extension SegmentManagerDelegate {
+    func getRightSideContext(maxCount: Int) -> String? { nil }
+    func getDocumentHead(maxCount: Int) -> String? { nil }
 }
 
 private extension ComposingText {

@@ -200,6 +200,8 @@ public struct OpenAIRequest {
     func toJSON() -> [String: Any] {
         [
             "model": modelName,
+            // azooKey Medical: 推論の過程（thinking）を省く。省かないと Gemma 4 などは答える前に長く考える
+            "reasoning_effort": "none",
             "messages": [
                 ["role": "system", "content": "You are an assistant that predicts the continuation of short text."],
                 ["role": "user", "content": """
@@ -271,33 +273,70 @@ public enum OpenAIError: LocalizedError, @unchecked Sendable {
 public enum OpenAIClient {
     // APIリクエストを送信する静的メソッド
     public static func sendRequest(_ request: OpenAIRequest, apiKey: String, apiEndpoint: String, logger: ((String) -> Void)? = nil) async throws -> [String] {
-        guard let url = URL(string: apiEndpoint) else {
+        let data = try await postChatCompletion(body: request.toJSON(), apiEndpoint: apiEndpoint)
+        return try parseResponseData(data, logger: logger)
+    }
+
+    /// azooKey Medical: この Mac の中のサーバーに chat/completions を送り、返事の本体を返す。
+    /// - API キーは送らない（この Mac の中のサーバーにだけ送るため。キーを求めるサーバーには対応しない）
+    /// - 文章が外へ送られるモデル（Ollama のクラウドのモデル）は断る
+    /// - 推論の過程を省く指定（reasoning_effort）を受け付けないサーバーには、その指定を外して1回だけ送り直す
+    static func postChatCompletion(body: [String: Any], apiEndpoint: String) async throws -> Data {
+        guard let url = URL(string: apiEndpoint), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             throw OpenAIError.invalidURL
         }
-
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = "POST"
-        urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body = request.toJSON()
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        // 非同期でリクエストを送信
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-
-        // レスポンスの検証
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenAIError.noServerResponse
+        guard LocalEndpointPolicy.isAllowed(url) else {
+            throw LocalOnlyError.nonLocalEndpoint(apiEndpoint)
         }
-
-        guard httpResponse.statusCode == 200 else {
+        let model = body["model"] as? String ?? ""
+        if await LocalModelList.isRemoteModel(model, chatEndpoint: apiEndpoint) {
+            throw LocalOnlyError.remoteModel(model)
+        }
+        var currentBody = body
+        for attempt in 0..<2 {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("Bearer local", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: currentBody)
+            let (data, response) = try await LocalEndpointPolicy.session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw OpenAIError.noServerResponse
+            }
+            if httpResponse.statusCode == 200 {
+                return data
+            }
             let responseBody = String(bytes: data, encoding: .utf8) ?? "Body is not encoded in UTF-8"
+            if attempt == 0, httpResponse.statusCode == 400, currentBody["reasoning_effort"] != nil, responseBody.lowercased().contains("reasoning") {
+                currentBody.removeValue(forKey: "reasoning_effort")
+                continue
+            }
             throw OpenAIError.invalidResponseStatus(code: httpResponse.statusCode, body: responseBody)
         }
+        throw OpenAIError.noServerResponse
+    }
 
-        // レスポンスデータの解析
-        return try parseResponseData(data, logger: logger)
+    /// 返事の本文から結果を取り出す。JSON の result を読み、``` で囲まれていても読む。
+    /// JSON でない普通の文が返ってきたら、その文をそのまま使う（JSON の書きかけのようなものは誤りとする）
+    static func extractResult(from content: String) throws -> String {
+        var text = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("```") {
+            var lines = text.components(separatedBy: "\n")
+            lines.removeFirst()
+            if let last = lines.last, last.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                lines.removeLast()
+            }
+            text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let data = text.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let result = parsed["result"] as? String {
+            return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !text.hasPrefix("{") else {
+            throw OpenAIError.parseError("Failed to parse structured response")
+        }
+        return text
     }
 
     // レスポンスデータのパースを行う静的メソッド
@@ -350,17 +389,10 @@ public enum OpenAIClient {
 
     // Simple text transformation method for AI Transform feature
     public static func sendTextTransformRequest(prompt: String, modelName: String, apiKey: String, apiEndpoint: String) async throws -> String {
-        guard let url = URL(string: apiEndpoint) else {
-            throw OpenAIError.invalidURL
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
+        // azooKey Medical: 推論の過程（thinking）を省く。省かないと Gemma 4 などは答える前に長く考え、返事に数十秒かかる
         let body: [String: Any] = [
             "model": modelName,
+            "reasoning_effort": "none",
             "messages": [
                 ["role": "system", "content": "You are a helpful assistant that transforms text according to user instructions. Return only the transformed text as a JSON object with a 'result' field."],
                 ["role": "user", "content": prompt]
@@ -385,20 +417,7 @@ public enum OpenAIClient {
             ] as [String: Any]
         ]
 
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        // Send async request
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        // Validate response
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw OpenAIError.noServerResponse
-        }
-
-        guard httpResponse.statusCode == 200 else {
-            let responseBody = String(bytes: data, encoding: .utf8) ?? "Body is not encoded in UTF-8"
-            throw OpenAIError.invalidResponseStatus(code: httpResponse.statusCode, body: responseBody)
-        }
+        let data = try await postChatCompletion(body: body, apiEndpoint: apiEndpoint)
 
         // Parse response data using similar approach as sendRequest
         let jsonObject = try JSONSerialization.jsonObject(with: data)
@@ -411,13 +430,7 @@ public enum OpenAIClient {
         }
 
         // Parse the structured JSON response
-        guard let contentData = contentString.data(using: .utf8),
-              let parsedContent = try JSONSerialization.jsonObject(with: contentData) as? [String: Any],
-              let result = parsedContent["result"] as? String else {
-            throw OpenAIError.parseError("Failed to parse structured response")
-        }
-
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try extractResult(from: contentString)
     }
 }
 

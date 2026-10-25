@@ -33,6 +33,11 @@ struct UserDictionaryEditorWindow: View {
         self.userDictionary.value.items.count >= 50
     }
 
+    /// 「追加」を押して何も入れなかった行（単語も読みも空）を消す
+    private func removeBlankItems() {
+        self.userDictionary.value.items.removeAll { $0.isBlank }
+    }
+
     var body: some View {
         VStack {
             Text("ユーザ辞書の設定")
@@ -63,6 +68,7 @@ struct UserDictionaryEditorWindow: View {
                     HStack {
                         Spacer()
                         Button("完了", systemImage: "checkmark") {
+                            self.removeBlankItems()
                             self.editTargetID = nil
                         }
                         Spacer()
@@ -93,7 +99,7 @@ struct UserDictionaryEditorWindow: View {
             }
             HStack {
                 Spacer()
-                Table(self.userDictionary.value.items) {
+                Table(self.userDictionary.value.items.filter { !$0.isBlank }) {
                     TableColumn("") { item in
                         HStack {
                             Button("編集する", systemImage: "pencil") {
@@ -125,6 +131,13 @@ struct UserDictionaryEditorWindow: View {
         }
         .frame(minHeight: 300, maxHeight: 600)
         .frame(minWidth: 600, maxWidth: 800)
+    }
+}
+
+extension Config.UserDictionaryEntry {
+    /// 単語も読みも入っていない行。「追加」を押して何も入れずに閉じると残る
+    var isBlank: Bool {
+        self.word.isEmpty && self.reading.isEmpty
     }
 }
 

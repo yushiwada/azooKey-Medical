@@ -633,7 +633,8 @@ struct ShortcutEditorSheet: View {
     // Reserved system shortcuts
     private var reservedShortcuts: [Core.KeyboardShortcut] {
         [
-            Config.TransformShortcut().value  // いい感じ変換のショートカット
+            Config.TransformShortcut().value,  // いい感じ変換のショートカット
+            Config.SelectionPromptShortcut().value  // 選んだ文を AI への指示として実行するショートカット
         ]
     }
 

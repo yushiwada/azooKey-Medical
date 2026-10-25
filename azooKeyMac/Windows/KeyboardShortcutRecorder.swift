@@ -6,11 +6,14 @@ import SwiftUI
 struct KeyboardShortcutRecorder: NSViewRepresentable {
     @Binding var shortcut: Core.KeyboardShortcut
     var placeholder: String = "ショートカットを入力..."
+    /// Delete で戻す先（azooKey Medical で追加。元は常にいい感じ変換の初期値）
+    var defaultShortcut: Core.KeyboardShortcut = .defaultTransformShortcut
 
     func makeNSView(context: Context) -> ShortcutRecorderView {
         let view = ShortcutRecorderView()
         view.shortcut = shortcut
         view.placeholder = placeholder
+        view.defaultShortcut = defaultShortcut
         view.onShortcutChanged = { newShortcut in
             shortcut = newShortcut
         }
@@ -26,6 +29,7 @@ struct KeyboardShortcutRecorder: NSViewRepresentable {
 
 /// NSViewベースのショートカットレコーダー
 class ShortcutRecorderView: NSView {
+    var defaultShortcut: Core.KeyboardShortcut = .defaultTransformShortcut
     var shortcut: Core.KeyboardShortcut = .defaultTransformShortcut {
         didSet {
             needsDisplay = true
@@ -89,7 +93,7 @@ class ShortcutRecorderView: NSView {
 
         // keyCode 51: Delete (Backspace), keyCode 117: Forward Delete - デフォルトにリセット
         if event.keyCode == 51 || event.keyCode == 117 {
-            shortcut = .defaultTransformShortcut
+            shortcut = defaultShortcut
             onShortcutChanged?(shortcut)
             window?.makeFirstResponder(nil)
             return

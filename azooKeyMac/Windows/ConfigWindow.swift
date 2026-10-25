@@ -4,13 +4,23 @@ import SwiftUI
 
 struct ConfigWindow: View {
     @ConfigState private var liveConversion = Config.LiveConversion()
+    @ConfigState private var multiLineLeftContext = Config.MultiLineLeftContext()
+    @ConfigState private var useTypedHistory = Config.UseTypedHistory()
+    @ConfigState private var useDocumentTitle = Config.UseDocumentTitle()
+    @ConfigState private var useRightSideContext = Config.UseRightSideContext()
+    @ConfigState private var medicalDictionary = Config.MedicalDictionary()
+    @ConfigState private var medicalContextBoost = Config.MedicalContextBoost()
+    @State private var selectionPromptShortcut: Core.KeyboardShortcut = Config.SelectionPromptShortcut().value
+    @ConfigState private var selectionPromptEnabled = Config.SelectionPromptEnabled()
+    @ConfigState private var controlSSuggestion = Config.ControlSSuggestion()
+    /// 選んだ文の実行のキーに選べない組み合わせを選んだときの知らせ
+    @State private var selectionPromptShortcutWarning: String?
     @ConfigState private var inputStyle = Config.InputStyle()
     @ConfigState private var typeBackSlash = Config.TypeBackSlash()
     @ConfigState private var punctuationStyle = Config.PunctuationStyle()
     @ConfigState private var typeHalfSpace = Config.TypeHalfSpace()
     @ConfigState private var optionDirectFullWidthInput = Config.OptionDirectFullWidthInput()
     @ConfigState private var zenzaiProfile = Config.ZenzaiProfile()
-    @ConfigState private var zenzaiPersonalizationLevel = Config.ZenzaiPersonalizationLevel()
     @ConfigState private var openAiApiKey = Config.OpenAiApiKey()
     @ConfigState private var openAiModelName = Config.OpenAiModelName()
     @ConfigState private var openAiApiEndpoint = Config.OpenAiApiEndpoint()
@@ -31,7 +41,19 @@ struct ConfigWindow: View {
     @State private var connectionTestInProgress = false
     @State private var showingRomajiTableEditor = false
     @State private var connectionTestResult: String?
+    @State private var localModels: [String] = []
+    @State private var localModelsMessage: String?
+    /// 接続先が Ollama か（モデルを入れる機能は Ollama のときだけ）
+    @State private var endpointIsOllama = false
+    /// いま入れているモデルと、その進み具合
+    @State private var pullingModel: String?
+    @State private var pullStatus: String?
+    @State private var pullFraction: Double?
+    @State private var pullTask: Task<Void, Never>?
+    @State private var pullMessage: String?
     @State private var systemUserDictionaryUpdateMessage: SystemUserDictionaryUpdateMessage?
+    /// azooKeyユーザ辞書の件数。辞書は別の画面で編集するので、保存されるたびに数え直す
+    @State private var userDictionaryItemCount = Self.countUserDictionaryItems()
     @State private var showingLearningResetConfirmation = false
     @State private var learningResetMessage: LearningResetMessage?
     @State private var foundationModelsAvailability: FoundationModelsAvailability?
@@ -180,6 +202,116 @@ struct ConfigWindow: View {
         }
     }
 
+    /// この Mac の LLM サーバーに入っているモデルの一覧を取り直す
+    func refreshLocalModels() async {
+        let endpoint = openAiApiEndpoint.value.isEmpty ? Config.OpenAiApiEndpoint.default : openAiApiEndpoint.value
+        endpointIsOllama = await LocalModelList.isOllama(chatEndpoint: endpoint)
+        do {
+            localModels = try await LocalModelList.fetch(chatEndpoint: endpoint)
+            localModelsMessage = localModels.isEmpty ? (endpointIsOllama ? "モデルが入っていません。下の「モデルを入れる」から入れてください" : "モデルが入っていません。LLM のアプリでモデルを入れてください") : nil
+        } catch {
+            localModels = []
+            if case .invalidResponseStatus(let code, _)? = error as? OpenAIError, code == 401 || code == 403 {
+                localModelsMessage = "このサーバーは API キーを求めています。azooKey Medical は、キーの要らないこの Mac の中のサーバーにだけ対応しています"
+            } else if let localOnly = error as? LocalOnlyError {
+                localModelsMessage = localOnly.localizedDescription
+            } else {
+                localModelsMessage = "ローカルLLMに接続できません。Ollama などが起動しているか確かめてください"
+            }
+        }
+    }
+
+    /// モデルの候補1行（入っていなければ「入れる」、入っていれば「使う」）
+    @ViewBuilder
+    private func modelCatalogRow(_ entry: LocalModelList.CatalogEntry) -> some View {
+        let installed = localModels.map(LocalModelList.canonicalName).contains(LocalModelList.canonicalName(entry.name))
+        let size = entry.downloadGB.rounded() == entry.downloadGB ? String(Int(entry.downloadGB)) : String(entry.downloadGB)
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: "\(entry.title)（\(entry.name)）")
+                Text(verbatim: "ダウンロード \(size)GB・メモリ \(entry.memoryGB)GB 以上の Mac 向け。\(entry.note)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if LocalModelList.physicalMemoryGB < entry.memoryGB {
+                    Text(verbatim: "この Mac（\(LocalModelList.physicalMemoryGB)GB）ではメモリが足りず、遅くなるか動きません")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                if pullingModel == entry.name {
+                    if let pullFraction {
+                        ProgressView(value: pullFraction)
+                    }
+                    Text(verbatim: pullStatus ?? "")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+            if installed {
+                if LocalModelList.canonicalName(openAiModelName.value) == LocalModelList.canonicalName(entry.name) {
+                    Text("使用中")
+                        .foregroundColor(.secondary)
+                } else {
+                    Button("使う") {
+                        $openAiModelName.wrappedValue = entry.name
+                    }
+                }
+            } else if pullingModel == entry.name {
+                Button("中止") {
+                    pullTask?.cancel()
+                }
+            } else {
+                Button("入れる") {
+                    startPull(entry.name)
+                }
+                .disabled(pullingModel != nil)
+            }
+        }
+    }
+
+    /// Ollama にモデルを入れて、終わったらそのモデルを使う
+    private func startPull(_ name: String) {
+        let endpoint = openAiApiEndpoint.value.isEmpty ? Config.OpenAiApiEndpoint.default : openAiApiEndpoint.value
+        pullingModel = name
+        pullStatus = "準備しています"
+        pullFraction = nil
+        pullMessage = nil
+        pullTask = Task { @MainActor in
+            do {
+                try await LocalModelList.pull(model: name, chatEndpoint: endpoint) { status, fraction in
+                    await MainActor.run {
+                        pullFraction = fraction
+                        pullStatus = Self.pullStatusText(status, fraction: fraction)
+                    }
+                }
+                await refreshLocalModels()
+                $openAiModelName.wrappedValue = name
+            } catch {
+                let cancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
+                pullMessage = cancelled ? "\(name) のダウンロードを中止しました（途中まで落とした分は Ollama が残します）" : "\(name) を入れられませんでした: \(error.localizedDescription)"
+            }
+            pullingModel = nil
+            pullTask = nil
+        }
+    }
+
+    /// Ollama が返す状態の文を、日本語の短い文にする
+    private static func pullStatusText(_ status: String, fraction: Double?) -> String {
+        switch status {
+        case "pulling manifest":
+            return "準備しています"
+        case "verifying sha256 digest":
+            return "ファイルを確かめています"
+        case "writing manifest", "removing unused layers", "success":
+            return "仕上げています"
+        default:
+            if let fraction {
+                return "ダウンロード中 \(Int(fraction * 100))%"
+            }
+            return "ダウンロード中"
+        }
+    }
+
     func testConnection() async {
         connectionTestInProgress = true
         connectionTestResult = nil
@@ -192,7 +324,7 @@ struct ConfigWindow: View {
             )
             _ = try await OpenAIClient.sendRequest(
                 testRequest,
-                apiKey: openAiApiKey.value,
+                apiKey: openAiApiKey.value.isEmpty ? "local" : openAiApiKey.value,
                 apiEndpoint: openAiApiEndpoint.value
             )
 
@@ -229,6 +361,11 @@ struct ConfigWindow: View {
                 learningResetMessage = nil
             }
         }
+    }
+
+    /// 「追加」を押して何も入れなかった行は数えない
+    private static func countUserDictionaryItems() -> Int {
+        Config.UserDictionary().value.items.filter { !$0.isBlank }.count
     }
 
     @ViewBuilder
@@ -304,6 +441,9 @@ struct ConfigWindow: View {
             }
         }
         .frame(width: 600, height: 500)
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification).receive(on: DispatchQueue.main)) { _ in
+            self.userDictionaryItemCount = Self.countUserDictionaryItems()
+        }
         .sheet(isPresented: $showingRomajiTableEditor) {
             RomajiTableEditorWindow(base: CustomInputTableStore.loadTable()) { exported in
                 do {
@@ -322,14 +462,16 @@ struct ConfigWindow: View {
         Form {
             Section {
                 VStack(alignment: .leading) {
-                    Picker("いい感じ変換", selection: $aiBackend) {
+                    Picker("使う AI", selection: $aiBackend) {
                         Text("オフ").tag(Config.AIBackendPreference.Value.off)
 
-                        if let availability = foundationModelsAvailability, availability.isAvailable {
-                            Text("Foundation Models").tag(Config.AIBackendPreference.Value.foundationModels)
+                        if let availability = foundationModelsAvailability, !availability.isAvailable {
+                            Text("Apple Intelligence（この Mac では使えません）").tag(Config.AIBackendPreference.Value.foundationModels)
+                        } else {
+                            Text("Apple Intelligence（Mac の中）").tag(Config.AIBackendPreference.Value.foundationModels)
                         }
 
-                        Text("OpenAI API").tag(Config.AIBackendPreference.Value.openAI)
+                        Text("ローカルLLM（この Mac の中のサーバー）").tag(Config.AIBackendPreference.Value.openAI)
                     }
                     .onAppear {
                         if !availabilityCheckDone {
@@ -357,17 +499,100 @@ struct ConfigWindow: View {
                     }
                 }
 
+                Toggle("範囲を選んでキーを押すと、選んだ文をAIへの指示として実行する", isOn: $selectionPromptEnabled)
+                HStack {
+                    Text("選んだ文を指示として実行するキー")
+                    Spacer()
+                    KeyboardShortcutRecorder(shortcut: $selectionPromptShortcut, defaultShortcut: .defaultSelectionPromptShortcut)
+                        .frame(width: 120, height: 24)
+                }
+                .disabled(!selectionPromptEnabled.value)
+                .onChange(of: selectionPromptShortcut) { newValue in
+                    // ⌃・⌥・⌘ のどれも使わない組み合わせ（Shift+A など）は、普段の入力を奪うので選べない
+                    guard !newValue.modifiers.isDisjoint(with: [.control, .option, .command]) else {
+                        selectionPromptShortcutWarning = "⌃・⌥・⌘ のどれかを含む組み合わせにしてください"
+                        selectionPromptShortcut = Config.SelectionPromptShortcut().value
+                        return
+                    }
+                    if newValue == Config.TransformShortcut().value {
+                        selectionPromptShortcutWarning = "いい感じ変換と同じキーです。別のキーにしてください"
+                        selectionPromptShortcut = Config.SelectionPromptShortcut().value
+                        return
+                    }
+                    selectionPromptShortcutWarning = nil
+                    Config.SelectionPromptShortcut().value = newValue
+                }
+                if let selectionPromptShortcutWarning {
+                    Text(selectionPromptShortcutWarning)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                } else if selectionPromptShortcut == .systemContextMenuShortcut {
+                    Text("Control+Return は macOS がメニューを出すのに使うため、IME に届きません。別のキーにしてください")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                Text(verbatim: "例: 「明日の打ち合わせの時間を確認するメールを書いて」を選んで \(selectionPromptShortcut.displayString)。範囲を選んでいないときは、キーはそのままアプリに渡ります。今ある文を書き直すときは、その文を選んで \(Config.TransformShortcut().value.displayString)（いい感じ変換）を押し、指示を打ちます。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle("何も選んでいないときの \(Config.TransformShortcut().value.displayString) で、続きの文の候補をAIに出させる（元の azooKey の機能）", isOn: $controlSSuggestion)
+
                 if aiBackend.value == .openAI {
                     HStack {
-                        SecureField("APIキー", text: $openAiApiKey, prompt: Text("例:sk-xxxxxxxxxxx"))
+                        Text("Ollama や LM Studio などを、この Mac で動かしておいてください。IME はこの Mac の中のサーバーにだけ接続します。文章が外へ送られる Ollama のクラウドのモデル（名前が cloud で終わるもの）は使いません。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                         helpButton(
-                            helpContent: "OpenAI APIキーはローカルのみで管理され、外部に公開されることはありません。生成の際にAPIを利用するため、課金が発生します。",
+                            helpContent: "OpenAI 互換の chat/completions に送ります。接続先は 127.0.0.1・localhost・::1 だけを受け付けます。",
                             isPresented: $openAiApiKeyPopover
                         )
                     }
-                    TextField("モデル名", text: $openAiModelName, prompt: Text("例: gpt-4o-mini"))
-                    TextField("エンドポイント", text: $openAiApiEndpoint, prompt: Text("例: https://api.openai.com/v1/chat/completions"))
-                        .help("例: https://api.openai.com/v1/chat/completions\nGemini: https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+                    HStack {
+                        Picker("モデル", selection: $openAiModelName) {
+                            ForEach(localModels, id: \.self) { name in
+                                Text(name).tag(name)
+                            }
+                            if !localModels.contains(openAiModelName.value) {
+                                Text(openAiModelName.value.isEmpty ? "（未選択）" : openAiModelName.value).tag(openAiModelName.value)
+                            }
+                        }
+                        Button("一覧を更新") {
+                            Task {
+                                await refreshLocalModels()
+                            }
+                        }
+                    }
+                    .onAppear {
+                        Task {
+                            await refreshLocalModels()
+                        }
+                    }
+                    Text("この Mac（メモリ \(LocalModelList.physicalMemoryGB)GB）のおすすめ: \(LocalModelList.recommendedModel())")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    if let localModelsMessage {
+                        Text(localModelsMessage)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                    if endpointIsOllama {
+                        DisclosureGroup("モデルを入れる（Ollama）") {
+                            ForEach(LocalModelList.catalog) { entry in
+                                modelCatalogRow(entry)
+                            }
+                            Text("ダウンロードは Ollama が行います。入れたモデルは、上の「モデル」で切り替えられます。")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            if let pullMessage {
+                                Text(pullMessage)
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                            }
+                        }
+                    }
+                    TextField("モデル名（一覧にないとき）", text: $openAiModelName, prompt: Text("例: qwen3.5:4b-q4_K_M"))
+                    TextField("接続先", text: $openAiApiEndpoint, prompt: Text("例: http://127.0.0.1:11434/v1/chat/completions"))
+                        .help("Ollama: http://127.0.0.1:11434/v1/chat/completions\nLM Studio: http://127.0.0.1:1234/v1/chat/completions")
 
                     HStack {
                         Button("接続テスト") {
@@ -375,7 +600,7 @@ struct ConfigWindow: View {
                                 await testConnection()
                             }
                         }
-                        .disabled(connectionTestInProgress || openAiApiKey.value.isEmpty)
+                        .disabled(connectionTestInProgress)
 
                         if connectionTestInProgress {
                             ProgressView()
@@ -392,13 +617,13 @@ struct ConfigWindow: View {
                     }
                 }
             } header: {
-                Label("いい感じ変換", systemImage: "sparkles")
+                Label("AI（選んだ文の実行・いい感じ変換）", systemImage: "sparkles")
             }
 
             Section {
                 LabeledContent {
                     HStack {
-                        Text("\(self.userDictionary.value.items.count)件のアイテム")
+                        Text("\(self.userDictionaryItemCount)件のアイテム")
                         Button("編集") {
                             (NSApplication.shared.delegate as? AppDelegate)!.openUserDictionaryEditorWindow()
                         }
@@ -448,6 +673,12 @@ struct ConfigWindow: View {
 
             Section {
                 Toggle("ライブ変換を有効化", isOn: $liveConversion)
+                Toggle("前の行も文脈として使う", isOn: $multiLineLeftContext)
+                Toggle("打った文章を覚えて文脈に使う（アプリが前の文章を返さないとき。メモリのみ）", isOn: $useTypedHistory)
+                Toggle("ノートのタイトルも参考にする（実験的）", isOn: $useDocumentTitle)
+                Toggle("カーソルの後ろの文章も参考にする（実験的）", isOn: $useRightSideContext)
+                Toggle("医療用語の辞書を使う", isOn: $medicalDictionary)
+                Toggle("医療の文脈では医療用語を強める（実験的）", isOn: $medicalContextBoost)
                 HStack {
                     TextField("変換プロフィール", text: $zenzaiProfile, prompt: Text("例：田中太郎/高校生"))
                     helpButton(
@@ -619,16 +850,11 @@ struct ConfigWindow: View {
                             switch self.debugTypoCorrectionState {
                             case .downloaded:
                                 EmptyView()
-                            case .failed:
-                                Button("再ダウンロード") {
-                                    self.downloadDebugTypoCorrectionWeights()
-                                }
-                                .disabled(self.debugTypoCorrectionDownloadInProgress)
-                            case .notDownloaded:
-                                Button("ダウンロード") {
-                                    self.downloadDebugTypoCorrectionWeights()
-                                }
-                                .disabled(self.debugTypoCorrectionDownloadInProgress)
+                            case .failed, .notDownloaded:
+                                // azooKey Medical は外部からのダウンロードを行わないので、重みは取れない
+                                Text("この版では使えません（外部からダウンロードしないため）")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                         if case .failed = self.debugTypoCorrectionState,
@@ -659,12 +885,7 @@ struct ConfigWindow: View {
                         self.debugTypoCorrectionErrorMessage = nil
                     }
                 }
-                Picker("パーソナライズ", selection: $zenzaiPersonalizationLevel) {
-                    Text("オフ").tag(Config.ZenzaiPersonalizationLevel.Value.off)
-                    Text("弱く").tag(Config.ZenzaiPersonalizationLevel.Value.soft)
-                    Text("普通").tag(Config.ZenzaiPersonalizationLevel.Value.normal)
-                    Text("強く").tag(Config.ZenzaiPersonalizationLevel.Value.hard)
-                }
+                // azooKey Medical: 「パーソナライズ」（別アプリ Tuner が作る言語モデル）は、Tuner との連携を外したので選べない
                 LabeledContent("アプリデータ") {
                     HStack {
                         Button("Finderで開く") {

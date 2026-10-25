@@ -1,0 +1,19 @@
+JMED-DICT mini（v1.1.2）
+https://huggingface.co/datasets/sociocom/JMED-DICT_mini （版 a0f5c997113947bb1be6264eddfdbe5ed1da25a3）
+作成: 奈良先端科学技術大学院大学 JMED-DICT 作業班
+ライセンス: Creative Commons Attribution 4.0 International（CC BY 4.0）。全文は 61、概要は https://creativecommons.org/licenses/by/4.0/deed.ja
+
+アプリの Resources/medical_dictionary（医療用語の辞書）は、JMED-DICT mini のうち、出典（SOURCE 列）に次のどちらかを含む語だけから作りました。
+どちらも奈良先端科学技術大学院大学が CC BY 4.0 で公開している資料です。
+- 万病辞書（MANBYO_202106）https://sociocom.naist.jp/manbyou-dic/
+- 百薬辞書（HYAKUYAKU_202107。データの SOURCE 列では HAKUYAKU と表記）https://sociocom.naist.jp/hyakuyaku-dic/
+日本医学会 医学用語辞典（JAMSMDIC）など、再配布の条件を確かめられない出典だけの語は含めていません。
+
+加えた変更:
+- 読みと表記だけを取り出しました。
+- 誤字、語の断片、元の辞書で候補に出せる語を除きました。
+- 変換エンジン（AzooKeyKanaKanjiConverter）の辞書の形式に変換しました。
+
+保証の否認: JMED-DICT mini とこの辞書は無保証で提供されます。配布元が示す注意事項（上の URL のページ）と、
+CC BY 4.0 の第5条（Disclaimer of Warranties and Limitation of Liability）が適用されます。
+医療用語の変換は誤ることがあります。診療録など正式な記録では、確定した文字を必ず読み直してください。
