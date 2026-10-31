@@ -8,6 +8,10 @@
 # UNIVERSAL=1 を付けると、Apple Silicon と Intel の両方で動く版をビルドし直してまとめる。
 #   公開用は、refs/heads/medical を取り出した変更のない作業ツリーでだけ作る。
 #   ビルドはホームフォルダの外の一時フォルダで行う（実行ファイルにユーザ名入りのパスが残らないように。DERIVED=<フォルダ> で変えられる）
+# ZENZ_GGUF=<gguf> を付けると、変換AIのモデルをそのファイルに差し替えてまとめる（配布用の zip では、追加学習したモデルに差し替える）。
+#   BUILD_STAMP.txt にモデルの名前と sha256 を書き、THIRD_PARTY_NOTICES.txt に追加学習したモデルのライセンス文と出典の表示
+#   （medical/licenses/23-zenz-v3.2-small-medical.txt）を入れる。公開用では、その表示に書いた sha256 のモデルでなければ止める。
+#   差し替えないときは、azooKeyMac/Resources/gguf の zenz-v3.2-small のまま（公開用では、それ以外のモデルが入っていれば止める）
 # 使い方: bash medical/scripts/make_dist.sh
 # できるもの: medical/dist/azooKey-Medical-YYYYMMDD-HHMMSS.zip（手元用は azooKey-Medical-personal-…）と、その SHA-256（….zip.sha256）
 #   zip の中身（名前はほかの OS でも化けないように英数字）: azooKeyMac.app、install.command、BUILD_STAMP.txt、
@@ -37,6 +41,31 @@ mkdir -p "$DIST" "$MED/build" "$WORK"
 ENTS=""
 trap '[ -n "$ENTS" ] && rm -f "$ENTS"' EXIT
 COMMIT="不明（この Mac に入っていた版をまとめた）"
+sha256_of() { shasum -a 256 "$1" | cut -d' ' -f1; }
+
+# 変換AIのモデルの差し替え（長いビルドの前に確かめる）
+ZENZ_GGUF="${ZENZ_GGUF:-}"
+MODEL_NOTICE="$MED/licenses/23-zenz-v3.2-small-medical.txt"
+BASE_GGUF="$REPO/azooKeyMac/Resources/gguf/ggml-model-Q5_K_M.gguf"
+if [ -n "$ZENZ_GGUF" ]; then
+  if [ "$(head -c 4 "$ZENZ_GGUF" 2>/dev/null || true)" != GGUF ]; then
+    echo "ZENZ_GGUF が gguf のファイルでない: ${ZENZ_GGUF}"
+    exit 1
+  fi
+  ZENZ_SHA=$(sha256_of "$ZENZ_GGUF")
+  # 公開用は、ライセンス文と出典の表示を書いたモデルだけを入れる（別のモデルに表示を付け違えないため）
+  if [ "$PERSONAL" = 0 ] && ! grep -q "$ZENZ_SHA" "$MODEL_NOTICE"; then
+    echo "ZENZ_GGUF の sha256（${ZENZ_SHA}）が ${MODEL_NOTICE#"$REPO"/} に書いたモデルと違う（配るモデルを変えたら、表示を直す）"
+    exit 1
+  fi
+fi
+
+# 変換AIのモデルを ZENZ_GGUF に差し替える（署名はこのあと付け直す）
+replace_model() {
+  echo "    変換AIのモデルを差し替える（$(basename "$ZENZ_GGUF")）"
+  cp "$ZENZ_GGUF" "$APP/Contents/Resources/ggml-model-Q5_K_M.gguf"
+  cmp -s "$ZENZ_GGUF" "$APP/Contents/Resources/ggml-model-Q5_K_M.gguf" || { echo "変換AIのモデルを写せなかった"; exit 1; }
+}
 
 # アプリの中身を変えたあとに署名し直す（権限は今の署名のものを引き継ぐ）
 sign_again() {
@@ -102,18 +131,39 @@ if [ "${UNIVERSAL:-0}" = 1 ]; then
   # 実行ファイルからデバッグ用の記号を外す。ソースのフォルダの場所（ホームフォルダのパス）が記録されていて、
   # ビルドの場所をホームの外にしても残るため。配る版では要らない（署名はこのあと付け直す）
   strip -S "$APP/Contents/MacOS/azooKeyMac" 2>/dev/null
+  [ -z "$ZENZ_GGUF" ] || replace_model
   sign_again
 else
   echo "[1/5] この Mac に入っている版をまとめる（${APP_SRC}。Intel の Mac 向けは UNIVERSAL=1 を付けて実行）"
   [ -d "$APP_SRC" ] || { echo "アプリがない: $APP_SRC"; exit 1; }
   ditto "$APP_SRC" "$APP"
+  if [ -n "$ZENZ_GGUF" ]; then
+    replace_model
+    sign_again
+  fi
 fi
 
 echo "[2/5] 署名・権限・中身を確かめる"
 codesign --verify --deep --strict "$APP"
 BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")
 check_entitlements "$APP" "$BUNDLE_ID"
-check_model_files "$APP/Contents/Resources/ggml-model-Q5_K_M.gguf" "$APP"/Contents/Resources/lm_*.marisa
+MODEL="$APP/Contents/Resources/ggml-model-Q5_K_M.gguf"
+check_model_files "$MODEL" "$APP"/Contents/Resources/lm_*.marisa
+# 入っている変換AIのモデルを確かめる（BUILD_STAMP.txt に名前と sha256 を書く）
+MODEL_SHA=$(sha256_of "$MODEL")
+if [ -n "$ZENZ_GGUF" ]; then
+  [ "$MODEL_SHA" = "$ZENZ_SHA" ] || { echo "アプリの中の変換AIのモデルが ZENZ_GGUF と違う"; exit 1; }
+  MODEL_NAME="$(basename "$ZENZ_GGUF")（ZENZ_GGUF で差し替えたもの）"
+elif [ -f "$BASE_GGUF" ] && [ "$MODEL_SHA" = "$(sha256_of "$BASE_GGUF")" ]; then
+  MODEL_NAME="zenz-v3.2-small（azooKeyMac/Resources/gguf のもの）"
+else
+  MODEL_NAME="アプリに入っていたもの（azooKeyMac/Resources/gguf のものとは違う）"
+  if [ "$PERSONAL" = 0 ]; then
+    echo "変換AIのモデルが azooKeyMac/Resources/gguf のものと違う。追加学習したモデルなら ZENZ_GGUF で同じファイルを指定する（ライセンス文と出典の表示を入れるため）"
+    exit 1
+  fi
+fi
+echo "    変換AIのモデル: ${MODEL_NAME}・sha256 ${MODEL_SHA}"
 ARCHS=$(lipo -archs "$APP/Contents/MacOS/azooKeyMac")
 echo "    実行ファイルの種類: $ARCHS"
 DICT_IN_APP="$APP/Contents/Resources/medical_dictionary"
@@ -239,9 +289,13 @@ INSTALL
 chmod +x "$WORK/install.command"
 
 echo "[4/5] ライセンス文・辞書の出典・版の記録を入れる"
-# 第三者の著作物のライセンス文（medical/licenses/*.txt を番号順につなげる）
+# 第三者の著作物のライセンス文（medical/licenses/*.txt を番号順につなげる）。
+# 追加学習したモデルのライセンス文と出典の表示（23）は、そのモデルに差し替えたときだけ入れる
 {
   for f in "$MED"/licenses/*.txt; do
+    if [ "$f" = "$MODEL_NOTICE" ] && [ -z "$ZENZ_GGUF" ]; then
+      continue
+    fi
     echo "===== $(basename "$f") ====="
     echo
     cat "$f"
@@ -274,6 +328,7 @@ fi
   echo "アプリ: $(describe_app "$APP")"
   echo "実行ファイルの種類: $ARCHS"
   echo "ビルドしたコミット: $COMMIT"
+  echo "変換AIのモデル: ${MODEL_NAME}・sha256 ${MODEL_SHA}"
   if [ -f "$DICT_IN_APP/BUILD_INFO" ]; then
     echo "医療用語の辞書: $(grep -E '^(PUBLIC|CREATED|ENTRIES|SCRIPTS_COMMIT)=' "$DICT_IN_APP/BUILD_INFO" | tr '\n' ' ' || true)"
   fi

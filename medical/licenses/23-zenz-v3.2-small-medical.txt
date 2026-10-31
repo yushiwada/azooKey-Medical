@@ -1,0 +1,61 @@
+zenz-v3.2-small を医療の文章で追加学習したモデル（gguf、Q5_K_M）
+ファイル: zenz-v3.2-small-medical-P2g30-a050-Q5_K_M.gguf
+sha256: 505247bc08527866a34fb4f584e9657084d5ff8f1e40b26fd580f0b7f6807a54
+入手元: https://github.com/yushiwada/azooKey-Medical の Releases
+作成: azooKey Medical の作者（2026-10-30）
+
+配布用の zip では、アプリの Resources/ggml-model-Q5_K_M.gguf をこのモデルに差し替えています。
+ソースからビルドしたアプリには入らず、変換AIのモデルは元の zenz-v3.2-small（20）のままです。
+
+ライセンス: Creative Commons Attribution-ShareAlike 4.0 International（CC BY-SA 4.0）
+  https://creativecommons.org/licenses/by-sa/4.0/legalcode （全文）
+  https://creativecommons.org/licenses/by-sa/4.0/deed.ja （概要）
+学習に使った一般の文に、CC BY-SA 4.0 の Wikipedia 日本語版に由来する部分が含まれるため、このライセンスで配ります。
+このモデルは無保証で提供されます（CC BY-SA 4.0 の第5条）。変換は誤ることがあります。
+
+作り方:
+元のモデル zenz-v3.2-small に、下の文書を短く切り分けて読み（カタカナ）を付けた変換の例 48万組を、LoRA で1周だけ追加学習しました。
+48万組の内訳は、科研費の研究課題の概要 259,483組、厚生労働省の文書 76,517組、一般の文 144,000組です。
+医療の語と読みが同じ普段の語を含む文の例も足しています。
+学習で変わった分（LoRA の差分）を半分の倍率で元の重みに足し、元のモデルと同じ形式の Q5_K_M に量子化しました。
+評価に使った文書は学習に使っていません。学習データと評価の問題は配っていません。
+
+元のモデル:
+- zenz-v3.2-small（Miwa Keita）https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf
+  配布元の表記は Apache License 2.0 です（全文は 20）。
+- その元の ku-nlp/gpt2-small-japanese-char（ku-nlp、CC BY-SA 4.0）https://huggingface.co/ku-nlp/gpt2-small-japanese-char
+
+学習に使った文書と出典の表示:
+- 厚生労働省ホームページの文書。利用条件は厚生労働省ホームページの利用規約（公共データ利用規約 第1.0版〔PDL1.0〕に準拠）
+  https://www.mhlw.go.jp/chosakuken/index.html
+  - 「重篤副作用疾患別対応マニュアル」（厚生労働省）（https://www.mhlw.go.jp/stf/seisakunitsuite/bunya/kenkou_iryou/iyakuhin/topics/tp061122-1.html
+    と、そこから開く19の区分のページ）を加工して作成
+  - 「指定難病の概要、診断基準等」（厚生労働省）（https://www.mhlw.go.jp/stf/newpage_53881.html ）を加工して作成
+  - 「医師国家試験問題および正答について」（厚生労働省）（第110回・第113〜120回の次のページ）を加工して作成。問題冊子の本文だけを使い、画像と正答は使っていません
+    https://www.mhlw.go.jp/seisakunitsuite/bunya/kenkou_iryou/iryou/topics/tp160411-01.html
+    https://www.mhlw.go.jp/seisakunitsuite/bunya/kenkou_iryou/iryou/topics/tp190415-01.html
+    https://www.mhlw.go.jp/seisakunitsuite/bunya/kenkou_iryou/iryou/topics/tp200421-01.html
+    https://www.mhlw.go.jp/seisakunitsuite/bunya/kenkou_iryou/iryou/topics/tp210416-01.html
+    https://www.mhlw.go.jp/seisakunitsuite/bunya/kenkou_iryou/iryou/topics/tp220421-01.html
+    https://www.mhlw.go.jp/seisakunitsuite/bunya/kenkou_iryou/iryou/topics/tp230502-01.html
+    https://www.mhlw.go.jp/seisakunitsuite/bunya/kenkou_iryou/iryou/topics/tp240424-01.html
+    https://www.mhlw.go.jp/seisakunitsuite/bunya/kenkou_iryou/iryou/topics/tp250428-01.html
+    https://www.mhlw.go.jp/seisakunitsuite/bunya/kenkou_iryou/iryou/topics/tp260424-01.html
+  加工の内容: PDF から本文を取り出し、ページ番号・振り仮名・表・名簿・症例の報告・文献などを除き、短く切り分けて読みを付け、変換の例にしました。
+  このモデルは azooKey Medical の作者が作ったもので、厚生労働省が作ったものでも、内容を保証するものでもありません。
+- KAKEN（科学研究費助成事業データベース、国立情報学研究所 https://kaken.nii.ac.jp/ ）の研究課題の概要のうち、医療の課題として選んだ16,754課題。
+  LLM-jp Corpus v3（LLM-jp、CC BY 4.0。全文は 61）の ja/kaken/kaken-v1.jsonl.gz から取りました。
+  https://gitlab.llm-jp.nii.ac.jp/datasets/llm-jp-corpus-v3
+  加工の内容: 同じ文の繰り返しと、1人の患者さんの経過を書いた文を除き、短く切り分けて読みを付け、変換の例にしました。
+- 一般の文: zenz-v2.5-dataset（Miwa Keita）https://huggingface.co/datasets/Miwa-Keita/zenz-v2.5-dataset の一部。
+  - Wikipedia 日本語版（2024年2月の版。作成は Wikipedia の執筆者 https://ja.wikipedia.org/ ）に由来する部分: CC BY-SA 4.0
+  - llm-jp-corpus v3 の Common Crawl に由来する部分: Open Data Commons Attribution License（ODC-BY 1.0）
+    https://opendatacommons.org/licenses/by/1-0/ と、Common Crawl の利用規約 https://commoncrawl.org/terms-of-use
+  加工の内容: 前の文脈を30文字に切り、一部の例では出力の後ろの部分を後ろの文脈に、名詞の並びを話題にしました。
+- 医療の語の読みと、変換AIに渡す手がかりの語: JMED-DICT mini（v1.1.2、奈良先端科学技術大学院大学 JMED-DICT 作業班、CC BY 4.0、60・61）のうち、
+  出典に万病辞書（MANBYO_202106）か百薬辞書（HYAKUYAKU_202107）を含む語だけ。
+  日本医学会 医学用語辞典（JAMSMDIC）だけを出典とする語は使っていません。
+- 読みを付けるのに使った道具: Sudachi（sudachipy 0.7.0）と SudachiDict core（どちらも Apache License 2.0）、
+  azooKey の辞書（azooKey_dictionary_storage、Apache License 2.0、12）
+
+文書の取得日は 2026-10-27 です。配布元の条件は、そのときに確かめたものです。

@@ -3,6 +3,7 @@
 # 使い方: bash medical/scripts/build_install.sh
 #   医療用語の辞書は medical/dictionaries/build/app_dictionary にあれば同梱する（作り方は medical/README.md）
 #   DICT_SRC=<フォルダ> で別の辞書を指定できる
+#   ZENZ_GGUF=<gguf> で変換AIのモデルを差し替えられる（手元で追加学習したモデルを試すとき）
 # ビルドしたものはそのまま使わず、写しを作ってから辞書を入れ替えて署名し直し、確かめてから入れ替える
 set -euo pipefail
 
@@ -87,6 +88,14 @@ if [ -f "$DICT_SRC/weak/user.louds" ] && [ -f "$DICT_SRC/strong/user.louds" ]; t
   fi
 else
   echo "[!] 医療用語の辞書が見つからないので、辞書なしで入れる（${DICT_SRC}）"
+fi
+if [ -n "${ZENZ_GGUF:-}" ]; then
+  if [ "$(head -c 4 "$ZENZ_GGUF" 2>/dev/null || true)" != GGUF ]; then
+    echo "ZENZ_GGUF が gguf のファイルでない: ${ZENZ_GGUF}"
+    exit 1
+  fi
+  echo "[+] 変換AIのモデルを差し替える（${ZENZ_GGUF}）"
+  cp "$ZENZ_GGUF" "$APP/Contents/Resources/ggml-model-Q5_K_M.gguf"
 fi
 echo "    署名し直す"
 ENTS=$(mktemp "${TMPDIR:-/tmp}/azkm-ents.XXXXXX")

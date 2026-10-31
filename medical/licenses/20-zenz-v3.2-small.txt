@@ -1,7 +1,8 @@
 zenz-v3.2-small（gguf、Q5_K_M）
 https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf （ggml-model-Q5_K_M.gguf、コミット c67e03e）
 
-アプリの Resources/ggml-model-Q5_K_M.gguf として、変更せずに同梱しています。
+ソースからビルドしたアプリには、Resources/ggml-model-Q5_K_M.gguf として、変更せずに同梱しています。
+配布用の zip では、このモデルを元に追加学習したモデル（23）に差し替えています。
 配布元のモデルカード（README.md）の表記: license: apache-2.0
 参考: このファイルの中の情報（general.name・general.organization）には「Gpt2 Small Japanese Char」「Ku Nlp」とあり、
 ku-nlp/gpt2-small-japanese-char（CC BY-SA 4.0、21 を参照）を元にしたモデルと読めます。

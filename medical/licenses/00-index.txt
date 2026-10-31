@@ -3,7 +3,7 @@ azooKey Medical に含まれる第三者の著作物とライセンス（THIRD P
 
 このファイルは medical/scripts/make_dist.sh が medical/licenses/*.txt をつなげて作ります。
 各ライセンスの全文は、このあとに「===== ファイル名 =====」の見出しを付けて続けます。
-版は 2026-10-24 にこのリポジトリのビルドで確かめたものです。
+版は 2026-10-24 にこのリポジトリのビルドで確かめたものです（23 は 2026-10-31 に足しました）。
 
 アプリ（azooKeyMac.app）の中身
 --------------------------------
@@ -13,7 +13,8 @@ azooKey Medical に含まれる第三者の著作物とライセンス（THIRD P
 | AzooKeyKanaKanjiConverter（04ce2ec） | 変換エンジン（実行ファイルの中） | MIT（Copyright (c) 2023 Miwa / Ensan） | https://github.com/azooKey/AzooKeyKanaKanjiConverter | 11 |
 | azooKey_dictionary_storage | 変換エンジンの辞書（Resources/AzooKeyKanaKanjiConverter_KanaKanjiConverterModuleWithDefaultDictionary.bundle/Contents/Resources/Dictionary） | Apache License 2.0（Copyright 2024 Miwa / ensan） | https://github.com/ensan-hcl/azooKey_dictionary_storage | 12 |
 | azooKey_emoji_dictionary_storage | 絵文字の辞書（同じ bundle の EmojiDictionary） | リポジトリにライセンスの表記なし。元データは mozc（BSD 3-Clause）と Unicode（Unicode License v3） | https://github.com/ensan-hcl/azooKey_emoji_dictionary_storage | 13 |
-| zenz-v3.2-small（gguf、Q5_K_M） | 変換AIのモデル（Resources/ggml-model-Q5_K_M.gguf） | Apache License 2.0（配布元の表記） | https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf | 20 |
+| zenz-v3.2-small（gguf、Q5_K_M） | 変換AIのモデル（Resources/ggml-model-Q5_K_M.gguf）。配布用の zip では、これを元に追加学習したモデル（下の行）に差し替える | Apache License 2.0（配布元の表記） | https://huggingface.co/Miwa-Keita/zenz-v3.2-small-gguf | 20 |
+| zenz-v3.2-small を医療の文章で追加学習したモデル（gguf、Q5_K_M） | 配布用の zip の変換AIのモデル（Resources/ggml-model-Q5_K_M.gguf）。ソースからビルドした版には入らない。23 は、このモデルに差し替えた zip にだけ入れる | CC BY-SA 4.0 | https://github.com/yushiwada/azooKey-Medical の Releases | 23 |
 | ku-nlp/gpt2-small-japanese-char のトークナイザ | 言語モデルの文字の表（Resources/AzooKeyKanaKanjiConverter_EfficientNGram.bundle/Contents/Resources/tokenizer） | CC BY-SA 4.0 | https://huggingface.co/ku-nlp/gpt2-small-japanese-char | 21 |
 | base_n5_lm | 言語モデル（Resources/lm_*.marisa） | 入手元にライセンスの表記なし | https://huggingface.co/Miwa-Keita/base_n5_lm | 22 |
 | llama.cpp（xcframework、b4846） | 変換AIを動かす部品（Frameworks/llama.framework） | MIT | https://github.com/azooKey/llama.cpp | 30 |
