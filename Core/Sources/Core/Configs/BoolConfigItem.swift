@@ -62,6 +62,12 @@ extension Config {
         static let `default` = false
         public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.medicalContextBoost"
     }
+    /// 日本語入力のままローマ字で打った英単語（kinoucomputer の computer など）を、その部分だけ自動で英字にする設定（azooKey Medical で追加）
+    public struct AutoEnglishWord: BoolConfigItem {
+        public init() {}
+        static let `default` = true
+        public static let key: String = "dev.ensan.inputmethod.azooKeyMac.preference.autoEnglishWord"
+    }
     /// IME で確定した文章を覚えて、アプリが前の文章を返さないときの文脈に使う設定（azooKey Medical で追加。メモリのみ）
     public struct UseTypedHistory: BoolConfigItem {
         public init() {}

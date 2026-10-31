@@ -498,6 +498,8 @@ class azooKeyMacInputController: IMKInputController, NSMenuItemValidation { // s
         case .editSegment(let count):
             self.segmentsManager.editSegment(count: count)
         case .commitMarkedText:
+            // azooKey Medical: Enter で確定するときは、末尾で続きを待っていた英字も含めて英単語を判別し直す
+            self.segmentsManager.checkEnglishWordsBeforeCommit(inputState: self.inputState)
             let text = self.segmentsManager.commitMarkedText(inputState: self.inputState)
             self.commitText(text, client: client)
         case .commitMarkedTextAndAppendToMarkedText(let string):

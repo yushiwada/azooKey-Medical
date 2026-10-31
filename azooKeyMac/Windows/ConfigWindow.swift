@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ConfigWindow: View {
     @ConfigState private var liveConversion = Config.LiveConversion()
+    @ConfigState private var autoEnglishWord = Config.AutoEnglishWord()
     @ConfigState private var multiLineLeftContext = Config.MultiLineLeftContext()
     @ConfigState private var useTypedHistory = Config.UseTypedHistory()
     @ConfigState private var useDocumentTitle = Config.UseDocumentTitle()
@@ -673,6 +674,10 @@ struct ConfigWindow: View {
 
             Section {
                 Toggle("ライブ変換を有効化", isOn: $liveConversion)
+                Toggle("ローマ字で打った英単語を自動で英字にする", isOn: $autoEnglishWord)
+                Text("例: kinoucomputerwotukatta →「昨日computerを使った」。tenki のように、かなになる綴りはそのまま")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 Toggle("前の行も文脈として使う", isOn: $multiLineLeftContext)
                 Toggle("打った文章を覚えて文脈に使う（アプリが前の文章を返さないとき。メモリのみ）", isOn: $useTypedHistory)
                 Toggle("ノートのタイトルも参考にする（実験的）", isOn: $useDocumentTitle)

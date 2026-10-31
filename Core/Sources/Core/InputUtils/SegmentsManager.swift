@@ -17,11 +17,14 @@ public final class SegmentsManager {
     /// テストなどの設定注入のための型。外部には設定を露出させない。
     public struct Context {
         public init() {}
-        init(useZenzai: Bool) {
+        init(useZenzai: Bool, isEnglishWord: ((String) -> Bool)? = nil) {
             self.useZenzai = useZenzai
+            self.isEnglishWord = isEnglishWord
         }
 
         var useZenzai: Bool = true
+        /// azooKey Medical: 英単語かどうかの判定を差し替える（テスト用。nil なら macOS の綴りの辞書を使う）
+        var isEnglishWord: ((String) -> Bool)?
     }
 
     public weak var delegate: (any SegmentManagerDelegate)?
@@ -34,6 +37,12 @@ public final class SegmentsManager {
 
     private var composingText: ComposingText = ComposingText()
     private var lastInputStyle: InputStyle = .direct
+
+    /// azooKey Medical: ローマ字で打った英単語を英字のまま残すために、打った元の要素（入力方式つき）と、
+    /// composingText.input の各要素がそのどれにあたるか（判別のために足した区切りは nil）を持つ。判別していないときは nil
+    private var typedElements: (elements: [ComposingText.InputElement], sources: [Int?])?
+    /// azooKey Medical: カーソルを動かす・途中を確定するなどしたので、この入力のあいだは英単語の判別をやめている
+    private var englishWordDetectionSuspended = false
 
     private var liveConversionEnabled: Bool {
         Config.LiveConversion().value
@@ -331,6 +340,10 @@ public final class SegmentsManager {
         self.backspaceTypoCorrectionLock = nil
         self.lastInputStyle = .direct
         self.zenzaiPersonalizationMode = self.getZenzaiPersonalizationMode()
+        // azooKey Medical: 英単語の判定に使う綴りの辞書を前もって起こしておく（このアプリの中で1回だけ）
+        if Config.AutoEnglishWord().value && self.context.isEnglishWord == nil {
+            EnglishSpellingChecker.shared.prepare()
+        }
     }
 
     @MainActor
@@ -341,6 +354,7 @@ public final class SegmentsManager {
         self.didExperienceSegmentEdition = false
         self.lastOperation = .other
         self.composingText.stopComposition()
+        self.resetEnglishWordDetection()
         self.shouldShowCandidateWindow = false
         self.selectionIndex = nil
         self.resetAdditionalCandidates()
@@ -354,6 +368,7 @@ public final class SegmentsManager {
     public func stopComposition() {
         self.contextCache = nil
         self.composingText.stopComposition()
+        self.resetEnglishWordDetection()
         self.kanaKanjiConverter.stopComposition()
         self.rawCandidates = nil
         self.didExperienceSegmentEdition = false
@@ -381,6 +396,125 @@ public final class SegmentsManager {
         self.lastInputStyle = .direct
     }
 
+    // MARK: - ローマ字で打った英単語を英字のまま残す（azooKey Medical で追加）
+
+    /// 入力を足す。英単語を判別しているときは、打った元の要素に足してから、表示と変換に使う要素（composingText）を作り直す
+    @MainActor
+    private func insertElements(_ elements: [ComposingText.InputElement]) {
+        guard self.prepareEnglishWordDetection(), let typed = self.typedElements else {
+            self.composingText.insertAtCursorPosition(elements)
+            return
+        }
+        let newTyped = typed.elements + elements
+        self.applyEnglishWordDetection(typedElements: newTyped, final: newTyped.last?.piece == .compositionSeparator)
+    }
+
+    /// 英単語の判別を続けてよいかを確かめる（新しい入力なら始める）
+    @MainActor
+    private func prepareEnglishWordDetection() -> Bool {
+        guard Config.AutoEnglishWord().value else {
+            self.typedElements = nil
+            return false
+        }
+        if self.composingText.isEmpty {
+            // 新しい入力の始まり
+            self.englishWordDetectionSuspended = false
+            self.typedElements = ([], [])
+            return true
+        }
+        guard !self.englishWordDetectionSuspended, self.composingText.isAtEndIndex else {
+            self.suspendEnglishWordDetection()
+            return false
+        }
+        guard let typed = self.typedElements else {
+            // 入力の途中で設定を ON にしたときなど。今の要素を、打ったままの要素とみなす
+            self.typedElements = (self.composingText.input, self.composingText.input.indices.map(Optional.some))
+            return true
+        }
+        guard typed.sources.count == self.composingText.input.count else {
+            // 想定していない変更があったので、この入力のあいだはやめる
+            self.suspendEnglishWordDetection()
+            return false
+        }
+        return true
+    }
+
+    /// 打った元の要素から英単語を判別し、表示と変換に使う要素（composingText）を作り直す（変わらなければそのまま）
+    @MainActor
+    private func applyEnglishWordDetection(typedElements typed: [ComposingText.InputElement], final: Bool) {
+        let detections = EnglishWordDetector.detect(typed, final: final, isEnglishWord: self.isEnglishWord(_:))
+        let applied = EnglishWordDetector.apply(detections, to: typed)
+        if applied.elements != self.composingText.input {
+            var composingText = ComposingText()
+            composingText.insertAtCursorPosition(applied.elements)
+            self.composingText = composingText
+        }
+        self.typedElements = (typed, applied.sources)
+    }
+
+    /// 末尾を消した後、打った元の要素からも同じだけ消して、英単語を判別し直す
+    @MainActor
+    private func updateTypedElementsAfterDeletion(inputBeforeDeletion before: [ComposingText.InputElement]) {
+        guard let typed = self.typedElements else {
+            return
+        }
+        guard Config.AutoEnglishWord().value, typed.sources.count == before.count else {
+            self.suspendEnglishWordDetection()
+            return
+        }
+        let after = self.composingText.input
+        // 消す前と後で変わらずに残った要素にあたる、打った元の要素を残す。消すときにかなに固められた要素は、そのまま後ろに足す
+        let unchangedCount = zip(before, after).prefix(while: ==).count
+        let keptCount = typed.sources[..<unchangedCount].compactMap { $0 }.last.map { $0 + 1 } ?? 0
+        let newTyped = Array(typed.elements[..<keptCount]) + after[unchangedCount...]
+        self.applyEnglishWordDetection(typedElements: newTyped, final: newTyped.last?.piece == .compositionSeparator)
+    }
+
+    /// Enter で確定する前に、末尾の英字も続きを待っていないものとして判別し直す。表示と変換に使う要素が変わったら true
+    @MainActor
+    private func finalizeEnglishWordDetection() -> Bool {
+        guard Config.AutoEnglishWord().value,
+              !self.englishWordDetectionSuspended,
+              self.composingText.isAtEndIndex,
+              let typed = self.typedElements,
+              typed.sources.count == self.composingText.input.count else {
+            return false
+        }
+        let before = self.composingText.input
+        self.applyEnglishWordDetection(typedElements: typed.elements, final: true)
+        return self.composingText.input != before
+    }
+
+    /// この入力のあいだは英単語の判別をやめる（表示はそのまま）
+    private func suspendEnglishWordDetection() {
+        self.typedElements = nil
+        self.englishWordDetectionSuspended = true
+    }
+
+    private func resetEnglishWordDetection() {
+        self.typedElements = nil
+        self.englishWordDetectionSuspended = false
+    }
+
+    private func isEnglishWord(_ word: String) -> Bool {
+        if let isEnglishWord = self.context.isEnglishWord {
+            return isEnglishWord(word)
+        }
+        return EnglishSpellingChecker.shared.isEnglishWord(word)
+    }
+
+    /// 先頭から composingCount のぶんを確定したとき、英字と英字のあいだで切れるか
+    static func splitsLetters(_ composingText: ComposingText, composingCount: ComposingCount) -> Bool {
+        var rest = composingText
+        rest.prefixComplete(composingCount: composingCount)
+        let characters = Array(composingText.convertTarget)
+        let consumedCount = characters.count - rest.convertTarget.count
+        guard 0 < consumedCount, consumedCount < characters.count, composingText.convertTarget.hasSuffix(rest.convertTarget) else {
+            return false
+        }
+        return [characters[consumedCount - 1], characters[consumedCount]].allSatisfy { $0.isASCII && $0.isLetter }
+    }
+
     /// 変換キーを押したタイミングで入力の区切りを示す
     @MainActor
     public func insertCompositionSeparator(inputStyle: InputStyle, skipUpdate: Bool = false) {
@@ -389,7 +523,7 @@ public final class SegmentsManager {
             return
         }
         self.lastInputStyle = inputStyle
-        self.composingText.insertAtCursorPosition([.init(piece: .compositionSeparator, inputStyle: inputStyle)])
+        self.insertElements([.init(piece: .compositionSeparator, inputStyle: inputStyle)])
         self.lastOperation = .insert
         if !skipUpdate {
             self.updateRawCandidate()
@@ -399,7 +533,7 @@ public final class SegmentsManager {
     @MainActor
     public func insertAtCursorPosition(_ string: String, inputStyle: InputStyle) {
         self.lastInputStyle = inputStyle
-        self.composingText.insertAtCursorPosition(string, inputStyle: inputStyle)
+        self.insertElements(string.map { .init(piece: .character($0), inputStyle: inputStyle) })
         self.lastOperation = .insert
         // ライブ変換がオフの場合は変換候補ウィンドウを出したい
         self.shouldShowCandidateWindow = !self.liveConversionEnabled
@@ -409,7 +543,7 @@ public final class SegmentsManager {
     @MainActor
     public func insertAtCursorPosition(pieces: [InputPiece], inputStyle: InputStyle) {
         self.lastInputStyle = inputStyle
-        self.composingText.insertAtCursorPosition(pieces.map { .init(piece: $0, inputStyle: inputStyle) })
+        self.insertElements(pieces.map { .init(piece: $0, inputStyle: inputStyle) })
         self.lastOperation = .insert
         // ライブ変換がオフの場合は変換候補ウィンドウを出したい
         self.shouldShowCandidateWindow = !self.liveConversionEnabled
@@ -418,6 +552,8 @@ public final class SegmentsManager {
 
     @MainActor
     public func editSegment(count: Int) {
+        // azooKey Medical: 文節の区切りを動かしたら、この入力のあいだは英単語の判別をやめる（今の表示のまま）
+        self.suspendEnglishWordDetection()
         // 現在選ばれているprefix candidateが存在する場合、まずそれに合わせてカーソルを移動する
         if let selectionIndex, let candidates, candidates.indices.contains(selectionIndex) {
             var afterComposingText = self.composingText
@@ -456,8 +592,12 @@ public final class SegmentsManager {
             // 一度segmentの編集状態もリセットにする
             self.didExperienceSegmentEdition = false
             previousComposingText = self.composingText.prefixToCursorPosition()
+            // azooKey Medical: カーソルが途中にあったので、この入力のあいだは英単語の判別をやめる
+            self.suspendEnglishWordDetection()
         }
+        let inputBeforeDeletion = self.composingText.input
         self.composingText.deleteBackwardFromCursorPosition(count: count)
+        self.updateTypedElementsAfterDeletion(inputBeforeDeletion: inputBeforeDeletion)
         self.lastOperation = .delete
         // ライブ変換がオフの場合は変換候補ウィンドウを出したい
         self.shouldShowCandidateWindow = !self.liveConversionEnabled
@@ -649,7 +789,7 @@ public final class SegmentsManager {
 
         let prefixComposingText = self.composingText.prefixToCursorPosition()
         let leftSideContext = forcedLeftSideContext ?? self.getCleanLeftSideContext(maxCount: 30)
-        let result = self.kanaKanjiConverter.requestCandidates(
+        var result = self.kanaKanjiConverter.requestCandidates(
             prefixComposingText,
             options: options(
                 leftSideContext: leftSideContext,
@@ -658,6 +798,11 @@ public final class SegmentsManager {
                 requireEnglishPrediction: Config.DebugPredictiveTyping().value ? .manualMix : .disabled
             )
         )
+        // azooKey Medical: 変換エンジンは英字を1文字ずつの語として扱うので、最初の文節が英単語の途中で切れる候補（meeting の m だけ、など）が出る。
+        // スペースで候補を出したときに先頭に並ばないよう除く（除いた結果がなければ、文全体の候補が先頭になる）
+        if Config.AutoEnglishWord().value {
+            result.firstClauseResults.removeAll { Self.splitsLetters(prefixComposingText, composingCount: $0.composingCount) }
+        }
         self.rawCandidates = result
     }
 
@@ -671,6 +816,8 @@ public final class SegmentsManager {
         self.kanaKanjiConverter.setCompletedData(candidate)
         self.kanaKanjiConverter.updateLearningData(candidate)
         self.composingText.prefixComplete(composingCount: candidate.composingCount)
+        // azooKey Medical: 一部を確定したら、残りの入力のあいだは英単語の判別をやめる（今の表示のまま）
+        self.suspendEnglishWordDetection()
 
         if !self.composingText.isEmpty {
             // カーソルを右端に移動する
@@ -906,6 +1053,15 @@ public final class SegmentsManager {
         self.additionalCandidates = []
         self.showingAdditionalCandidateCount = 0
         self.isFixingAdditionalCandidateTop = false
+    }
+
+    /// azooKey Medical: 変換せずに Enter で確定する前に呼ぶ。末尾で続きを待っていた英字も含めて英単語を判別し直す（meeting の g など）。
+    /// アプリ側から確定させられるとき（commitComposition）には呼ばない（アプリへの問い合わせを増やさないため）
+    @MainActor
+    public func checkEnglishWordsBeforeCommit(inputState: InputState) {
+        if inputState == .composing, self.finalizeEnglishWordDetection() {
+            self.updateRawCandidate()
+        }
     }
 
     @MainActor
