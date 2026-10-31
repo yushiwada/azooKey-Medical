@@ -1,5 +1,5 @@
 #!/bin/bash
-# 選別済みの語（needed_missing.tsv）から、アプリに同梱する医療用語の辞書を作る。
+# 選別済みの語（build_all.sh では needed_clean.tsv、変換を乱す語を除く前は needed_missing.tsv）から、アプリに同梱する医療用語の辞書を作る。
 #   strong/ … 前の文章が医療の内容のときに使う（強く効かせる）
 #   weak/   … それ以外で使う（候補には出るが、普段の語より前には出にくい）
 #   markers.txt … 医療の文脈かを判定する語
@@ -8,7 +8,9 @@
 # 既定は公開用: 出典に万病辞書か百薬辞書を含む語だけにする（ここで license_filter.py をかける）。personal/ は使わない
 # PERSONAL=1 を付けると手元用: JMED-DICT mini の全部の出典と、個人用の追加語（personal/*.tsv、読み<TAB>表記）を使う。配布しない
 # ほかに指定できるもの: NEEDED=<語のTSV>、BUILD_DIR=<作業フォルダ>、OUT_DIR=<出力フォルダ>、JMED_DIR=<JMED-DICT の CSV のフォルダ>、
-#   CHID=<文字表>、BUILDER=<dict-builder>、STRONG_COST・WEAK_COST・MIN_FREQ
+#   CHID=<文字表>、BUILDER=<dict-builder>、STRONG_COST・WEAK_COST・MIN_FREQ、
+#   STRONG_EXCLUDE=<strong だけから外す語の TSV。読み<TAB>表記>（clean_entries.py の d2）、
+#   CLEANED=1（NEEDED が clean_entries.py で変換を乱す語を除いたものなら。NOTICE.txt と BUILD_INFO に書く）
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 MED="$(cd "$DIR/.." && pwd)"
@@ -24,6 +26,9 @@ WEAK=${WEAK_COST:--16}
 MIN_FREQ=${MIN_FREQ:-0}
 NEEDED="${NEEDED:-$BUILD/needed_missing.tsv}"
 [ -f "$NEEDED" ] || { echo "語の TSV がない: ${NEEDED}（build_all.sh で作る）"; exit 1; }
+STRONG_EXCLUDE="${STRONG_EXCLUDE:-}"
+[ -z "$STRONG_EXCLUDE" ] || [ -f "$STRONG_EXCLUDE" ] || { echo "strong から外す語の TSV がない: ${STRONG_EXCLUDE}"; exit 1; }
+CLEANED="${CLEANED:-0}"
 [ -f "$BUILD/markers_jmed.txt" ] || { echo "判定用の語の一覧がない: $BUILD/markers_jmed.txt（build_all.sh で作る）"; exit 1; }
 
 # 公開用か手元用か。指定のないときは公開用。PUBLIC=0 だけでは手元用にしない（取り違えを防ぐ）
@@ -70,18 +75,28 @@ fi
 mkdir -p "$OUT"
 for kind in strong weak; do
   cost=$([ "$kind" = strong ] && echo "$STRONG" || echo "$WEAK")
+  exclude=$([ "$kind" = strong ] && echo "$STRONG_EXCLUDE" || echo "")
   tsv="$BUILD/$kind.tsv"
-  # 個人用の語（手元用だけ）と選別済みの語を、読み<TAB>表記<TAB>コスト にまとめる。
+  # 個人用の語（手元用だけ）と選別済みの語を、読み<TAB>表記<TAB>コスト にまとめる。strong では STRONG_EXCLUDE の語を除く（個人用の語は除かない）。
   # 改行の CR や先頭の BOM は外し、読みがかな以外・制御文字を含む行があれば止める
-  python3 -I - "$cost" "$MIN_FREQ" "$tsv" "$ENTRIES" ${PERSONAL_FILES[@]+"${PERSONAL_FILES[@]}"} <<'PY'
+  python3 -I - "$cost" "$MIN_FREQ" "$tsv" "$exclude" "$ENTRIES" ${PERSONAL_FILES[@]+"${PERSONAL_FILES[@]}"} <<'PY'
 import re
 import sys
 import unicodedata
 
-cost, min_freq, out, entries, *personal = sys.argv[1:]
+cost, min_freq, out, exclude, entries, *personal = sys.argv[1:]
 KANA = re.compile(r"^[ぁ-ゖァ-ヺー]+$")
 lines = []
 bad = []
+skip = set()
+if exclude:
+    with open(exclude, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            cols = line.rstrip("\n").split("\t")
+            skip.add((cols[0], cols[1]))
+excluded = 0
 
 
 def has_control(text):
@@ -116,8 +131,15 @@ with open(entries, encoding="utf-8") as f:
         if len(cols) < 4 or not cols[3].lstrip("-").isdigit():
             bad.append(f"{entries}:{n}: 列が足りない: {line!r}")
             continue
+        if (cols[0], cols[1]) in skip:
+            excluded += 1
+            continue
         if int(cols[3]) >= int(min_freq) and check(entries, n, cols[0], cols[1]):
             lines.append(f"{cols[0]}\t{cols[1]}\t{cost}\n")
+if exclude:
+    print(f"strong だけから外した語: {excluded}（一覧 {len(skip)} 語）")
+    with open(out + ".excluded", "w", encoding="utf-8") as f:
+        f.write(f"{excluded}\n")
 if bad:
     sys.exit("辞書に入れられない行がある:\n" + "\n".join(bad[:20]) + (f"\n…ほか {len(bad) - 20} 行" if len(bad) > 20 else ""))
 with open(out, "w", encoding="utf-8") as f:
@@ -128,6 +150,12 @@ done
 # dict-builder が書き出した語の数（同じ読みと表記の重複と、文字表にない文字を含む読みを除いたあと）
 WRITTEN=$(sed -n 's/^書き出し: \([0-9]*\) 語（除外 \([0-9]*\) 行）.*/\1 \2/p' "$BUILD/weak.builder.log")
 [ -n "$WRITTEN" ] || { echo "dict-builder の出力から語の数を読めない（$BUILD/weak.builder.log）"; exit 1; }
+STRONG_WRITTEN=$(sed -n 's/^書き出し: \([0-9]*\) 語（除外 \([0-9]*\) 行）.*/\1/p' "$BUILD/strong.builder.log")
+[ -n "$STRONG_WRITTEN" ] || { echo "dict-builder の出力から語の数を読めない（$BUILD/strong.builder.log）"; exit 1; }
+STRONG_EXCLUDED=0
+if [ -n "$STRONG_EXCLUDE" ]; then
+  STRONG_EXCLUDED=$(cat "$BUILD/strong.tsv.excluded")
+fi
 
 # 出典の表示（CC BY 4.0 の条件）。アプリに同梱するので辞書と一緒に置く
 if [ "$PUBLIC" = 1 ]; then
@@ -136,8 +164,12 @@ if [ "$PUBLIC" = 1 ]; then
 https://huggingface.co/datasets/sociocom/JMED-DICT_mini （版 a0f5c997113947bb1be6264eddfdbe5ed1da25a3）
 ライセンス: https://creativecommons.org/licenses/by/4.0/deed.ja
 この版は公開用で、出典に万病辞書（MANBYO_202106、https://sociocom.naist.jp/manbyou-dic/ ）か百薬辞書（HYAKUYAKU_202107、https://sociocom.naist.jp/hyakuyaku-dic/ 。データの SOURCE 列では HAKUYAKU と表記）を含む語だけを使っています。どちらも奈良先端科学技術大学院大学が CC BY 4.0 で公開している資料です。
-変更点: 読みと表記だけを取り出し、誤字・語の断片・もとの辞書で候補に出せる語を除き、変換エンジンの辞書形式に変換しました。
 NOTICE
+  if [ "$CLEANED" = 1 ]; then
+    echo "変更点: 読みと表記だけを取り出し、誤字・読みの合わない組・語の断片・助詞などの付いた語・もとの辞書で候補に出せる語を除き（強く効かせる版〔strong〕では、よく使う語と同じ短い読みのまれな語も除き）、変換エンジンの辞書形式に変換しました。" >> "$OUT/NOTICE.txt"
+  else
+    echo "変更点: 読みと表記だけを取り出し、誤字・語の断片・もとの辞書で候補に出せる語を除き、変換エンジンの辞書形式に変換しました。" >> "$OUT/NOTICE.txt"
+  fi
 else
   cat > "$OUT/NOTICE.txt" <<'NOTICE'
 個人用。JAMSMDIC など再配布できない出典を含むため配布しない。
@@ -172,6 +204,9 @@ sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
   echo "WEAK_COST=$WEAK"
   echo "MIN_FREQ=$MIN_FREQ"
   echo "ENTRIES=${WRITTEN% *}"
+  echo "STRONG_ENTRIES=$STRONG_WRITTEN"
+  echo "STRONG_EXCLUDED=$STRONG_EXCLUDED"
+  echo "CLEANED=$CLEANED"
   echo "SKIPPED_LINES=${WRITTEN#* }"
   echo "PERSONAL_FILES=${#PERSONAL_FILES[@]}"
   echo "MARKERS=$(wc -l < "$OUT/markers.txt" | tr -d ' ')"
@@ -179,6 +214,9 @@ sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
     echo "SHA256 $(sha "$f") jmed/$(basename "$f")"
   done
   echo "SHA256 $(sha "$NEEDED") $(basename "$NEEDED")"
+  if [ -n "$STRONG_EXCLUDE" ]; then
+    echo "SHA256 $(sha "$STRONG_EXCLUDE") $(basename "$STRONG_EXCLUDE")"
+  fi
   if [ "$PUBLIC" = 1 ]; then
     echo "SHA256 $(sha "$ENTRIES") $(basename "$ENTRIES")"
   fi
@@ -198,4 +236,4 @@ if [ -d "$FINAL" ]; then
   mv "$FINAL" "$BUILD/old/$(basename "$FINAL")-$(date +%Y%m%d-%H%M%S)"
 fi
 mv "$OUT" "$FINAL"
-echo "$([ "$PUBLIC" = 1 ] && echo 公開用 || echo 手元用): 語 ${WRITTEN% *}・判定用の語 $(wc -l < "$FINAL/markers.txt" | tr -d ' ') → $FINAL"
+echo "$([ "$PUBLIC" = 1 ] && echo 公開用 || echo 手元用): 語 ${WRITTEN% *}（strong ${STRONG_WRITTEN}）・判定用の語 $(wc -l < "$FINAL/markers.txt" | tr -d ' ') → $FINAL"
